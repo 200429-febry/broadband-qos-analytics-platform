@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+.turbo
+.vercel
+.git
+backend/venv
+ml-service/venv
+.venv
+__pycache__
+*.pyc

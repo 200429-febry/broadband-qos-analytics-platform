@@ -1,0 +1,446 @@
+"use client";
+
+import { useEffect } from "react";
+
+type Lang = "id" | "en" | "ja" | "ko" | "zh" | "ar" | "de" | "fr" | "es" | "pt";
+
+const defaultLang: Lang = "id";
+
+const dictionaries: Record<Lang, Record<string, string>> = {
+  id: {
+    "Dashboard": "Dashboard",
+    "Realtime Monitor": "Monitor Realtime",
+    "Streaming QoE": "QoE Streaming",
+    "QoS Analytics": "Analitik QoS",
+    "Coverage Map": "Peta Coverage",
+    "Prediction ML": "Prediksi ML",
+    "Stream Health": "Kesehatan Stream",
+    "Incidents": "Insiden",
+    "Reports": "Laporan",
+    "Deployment": "Deployment",
+    "Observability": "Observability",
+    "Alert Center": "Pusat Alert",
+    "Topology": "Topologi",
+    "Database Monitor": "Monitor Database",
+    "Audit Log": "Log Audit",
+    "User Management": "Manajemen User",
+    "Settings": "Pengaturan",
+    "System Stable": "Sistem Stabil",
+    "System Critical": "Sistem Kritis",
+    "Logout": "Keluar",
+    "Search modules, BTS, streams, alerts...": "Cari modul, BTS, stream, alert...",
+    "NOC Dashboard": "Dashboard NOC",
+    "Executive overview of global network Quality of Service.": "Ringkasan eksekutif Quality of Service jaringan.",
+    "Database Proof / System Evidence": "System Evidence Center",
+    "Database Proof": "System Evidence Center",
+    "System Evidence": "System Evidence",
+    "Command bukti cepat untuk audit teknis:": "Command bukti cepat untuk audit teknis:",
+    "Open Cloud SQL Instance": "Buka Cloud SQL Instance",
+    "Open Cloud SQL Databases": "Buka Database Cloud SQL",
+    "Open BigQuery Analytics": "Buka BigQuery Analytics",
+    "Open API Service Console": "Buka Console API Service",
+    "Open API Logs": "Buka Log API",
+    "Open Raw QoS Metrics": "Buka Raw QoS Metrics",
+    "Open Raw QoS History": "Buka Raw QoS History",
+    "Open Raw QoE Latest": "Buka Raw QoE Latest",
+    "Operational observability for Cloud SQL status and real QoE telemetry used by dashboard, reports, alerts, and prediction modules.": "Observability operasional untuk status Cloud SQL dan telemetry QoE real yang digunakan dashboard, laporan, alert, dan modul prediksi.",
+    "Complete Google Sign-In": "Selesaikan Google Sign-In",
+    "Continue to Dashboard": "Lanjut ke Dashboard",
+    "Are you AKSARA Team?": "Apakah Anda Tim AKSARA?",
+    "New Google accounts are automatically created as Viewer.": "Akun Google baru otomatis dibuat sebagai Viewer.",
+    "Theme Mode": "Mode Tema",
+    "Font Size": "Ukuran Font",
+    "Sidebar Mode": "Mode Sidebar",
+    "UI Density": "Kepadatan UI",
+    "Telemetry Source": "Sumber Telemetry",
+    "Language": "Bahasa",
+    "Apply": "Terapkan",
+    "Refresh": "Refresh",
+    "Refresh Data": "Refresh Data",
+    "Generate Technical PDF": "Generate PDF Teknis",
+    "Export Real CSV": "Export CSV Real",
+  },
+  en: {
+    "Dashboard": "Dashboard",
+    "Realtime Monitor": "Realtime Monitor",
+    "Streaming QoE": "Streaming QoE",
+    "QoS Analytics": "QoS Analytics",
+    "Coverage Map": "Coverage Map",
+    "Prediction ML": "Prediction ML",
+    "Stream Health": "Stream Health",
+    "Incidents": "Incidents",
+    "Reports": "Reports",
+    "Deployment": "Deployment",
+    "Observability": "Observability",
+    "Alert Center": "Alert Center",
+    "Topology": "Topology",
+    "Database Monitor": "Database Monitor",
+    "Audit Log": "Audit Log",
+    "User Management": "User Management",
+    "Settings": "Settings",
+    "System Stable": "System Stable",
+    "System Critical": "System Critical",
+    "Logout": "Logout",
+  },
+  ja: {
+    "Dashboard": "ダッシュボード",
+    "Realtime Monitor": "リアルタイム監視",
+    "Streaming QoE": "ストリーミングQoE",
+    "QoS Analytics": "QoS分析",
+    "Coverage Map": "カバレッジマップ",
+    "Prediction ML": "ML予測",
+    "Stream Health": "ストリーム状態",
+    "Incidents": "インシデント",
+    "Reports": "レポート",
+    "Deployment": "デプロイ",
+    "Observability": "可観測性",
+    "Alert Center": "アラートセンター",
+    "Topology": "トポロジー",
+    "Database Monitor": "データベース監視",
+    "Audit Log": "監査ログ",
+    "User Management": "ユーザー管理",
+    "Settings": "設定",
+    "System Stable": "システム安定",
+    "System Critical": "システム重大",
+    "Logout": "ログアウト",
+  },
+  ko: {
+    "Dashboard": "대시보드",
+    "Realtime Monitor": "실시간 모니터",
+    "Streaming QoE": "스트리밍 QoE",
+    "QoS Analytics": "QoS 분석",
+    "Coverage Map": "커버리지 맵",
+    "Prediction ML": "예측 ML",
+    "Stream Health": "스트림 상태",
+    "Incidents": "장애 이력",
+    "Reports": "리포트",
+    "Deployment": "배포",
+    "Observability": "관측성",
+    "Alert Center": "알림 센터",
+    "Topology": "토폴로지",
+    "Database Monitor": "데이터베이스 모니터",
+    "Audit Log": "감사 로그",
+    "User Management": "사용자 관리",
+    "Settings": "설정",
+    "System Stable": "시스템 안정",
+    "System Critical": "시스템 위험",
+    "Logout": "로그아웃",
+  },
+  zh: {
+    "Dashboard": "仪表盘",
+    "Realtime Monitor": "实时监控",
+    "Streaming QoE": "流媒体QoE",
+    "QoS Analytics": "QoS分析",
+    "Coverage Map": "覆盖地图",
+    "Prediction ML": "机器学习预测",
+    "Stream Health": "流媒体健康",
+    "Incidents": "事件",
+    "Reports": "报告",
+    "Deployment": "部署",
+    "Observability": "可观测性",
+    "Alert Center": "告警中心",
+    "Topology": "拓扑",
+    "Database Monitor": "数据库监控",
+    "Audit Log": "审计日志",
+    "User Management": "用户管理",
+    "Settings": "设置",
+    "System Stable": "系统稳定",
+    "System Critical": "系统严重",
+    "Logout": "退出",
+  },
+  ar: {
+    "Dashboard": "لوحة التحكم",
+    "Realtime Monitor": "المراقبة اللحظية",
+    "Streaming QoE": "جودة تجربة البث",
+    "QoS Analytics": "تحليلات جودة الخدمة",
+    "Coverage Map": "خريطة التغطية",
+    "Prediction ML": "تنبؤات تعلم الآلة",
+    "Stream Health": "صحة البث",
+    "Incidents": "الحوادث",
+    "Reports": "التقارير",
+    "Deployment": "النشر",
+    "Observability": "المراقبة التشغيلية",
+    "Alert Center": "مركز التنبيهات",
+    "Topology": "الطوبولوجيا",
+    "Database Monitor": "مراقبة قاعدة البيانات",
+    "Audit Log": "سجل التدقيق",
+    "User Management": "إدارة المستخدمين",
+    "Settings": "الإعدادات",
+    "System Stable": "النظام مستقر",
+    "System Critical": "النظام حرج",
+    "Logout": "تسجيل الخروج",
+  },
+  de: {
+    "Dashboard": "Dashboard",
+    "Realtime Monitor": "Echtzeitmonitor",
+    "Streaming QoE": "Streaming-QoE",
+    "QoS Analytics": "QoS-Analytik",
+    "Coverage Map": "Abdeckungskarte",
+    "Prediction ML": "ML-Prognose",
+    "Stream Health": "Stream-Zustand",
+    "Incidents": "Vorfälle",
+    "Reports": "Berichte",
+    "Deployment": "Bereitstellung",
+    "Observability": "Observability",
+    "Alert Center": "Alarmzentrum",
+    "Topology": "Topologie",
+    "Database Monitor": "Datenbankmonitor",
+    "Audit Log": "Audit-Protokoll",
+    "User Management": "Benutzerverwaltung",
+    "Settings": "Einstellungen",
+    "System Stable": "System stabil",
+    "System Critical": "System kritisch",
+    "Logout": "Abmelden",
+  },
+  fr: {
+    "Dashboard": "Tableau de bord",
+    "Realtime Monitor": "Surveillance temps réel",
+    "Streaming QoE": "QoE Streaming",
+    "QoS Analytics": "Analyse QoS",
+    "Coverage Map": "Carte de couverture",
+    "Prediction ML": "Prédiction ML",
+    "Stream Health": "Santé du flux",
+    "Incidents": "Incidents",
+    "Reports": "Rapports",
+    "Deployment": "Déploiement",
+    "Observability": "Observabilité",
+    "Alert Center": "Centre d’alertes",
+    "Topology": "Topologie",
+    "Database Monitor": "Moniteur base de données",
+    "Audit Log": "Journal d’audit",
+    "User Management": "Gestion utilisateurs",
+    "Settings": "Paramètres",
+    "System Stable": "Système stable",
+    "System Critical": "Système critique",
+    "Logout": "Déconnexion",
+  },
+  es: {
+    "Dashboard": "Panel",
+    "Realtime Monitor": "Monitor en tiempo real",
+    "Streaming QoE": "QoE de Streaming",
+    "QoS Analytics": "Analítica QoS",
+    "Coverage Map": "Mapa de cobertura",
+    "Prediction ML": "Predicción ML",
+    "Stream Health": "Salud del stream",
+    "Incidents": "Incidentes",
+    "Reports": "Reportes",
+    "Deployment": "Despliegue",
+    "Observability": "Observabilidad",
+    "Alert Center": "Centro de alertas",
+    "Topology": "Topología",
+    "Database Monitor": "Monitor de base de datos",
+    "Audit Log": "Registro de auditoría",
+    "User Management": "Gestión de usuarios",
+    "Settings": "Configuración",
+    "System Stable": "Sistema estable",
+    "System Critical": "Sistema crítico",
+    "Logout": "Cerrar sesión",
+  },
+  pt: {
+    "Dashboard": "Painel",
+    "Realtime Monitor": "Monitor em tempo real",
+    "Streaming QoE": "QoE de Streaming",
+    "QoS Analytics": "Análise QoS",
+    "Coverage Map": "Mapa de cobertura",
+    "Prediction ML": "Predição ML",
+    "Stream Health": "Saúde do stream",
+    "Incidents": "Incidentes",
+    "Reports": "Relatórios",
+    "Deployment": "Implantação",
+    "Observability": "Observabilidade",
+    "Alert Center": "Central de alertas",
+    "Topology": "Topologia",
+    "Database Monitor": "Monitor de banco de dados",
+    "Audit Log": "Log de auditoria",
+    "User Management": "Gerenciamento de usuários",
+    "Settings": "Configurações",
+    "System Stable": "Sistema estável",
+    "System Critical": "Sistema crítico",
+    "Logout": "Sair",
+  },
+};
+
+const themeVars: Record<string, Record<string, string>> = {
+  obsidian: {
+    "--aksara-bg": "#020617",
+    "--aksara-panel": "#0f172a",
+    "--aksara-panel2": "#111827",
+    "--aksara-border": "#1e293b",
+    "--aksara-text": "#f8fafc",
+    "--aksara-muted": "#94a3b8",
+    "--aksara-accent": "#06b6d4",
+    "--aksara-accent2": "#10b981",
+    "--aksara-danger": "#ef4444",
+  },
+  pacific: {
+    "--aksara-bg": "#031926",
+    "--aksara-panel": "#06283d",
+    "--aksara-panel2": "#0b3954",
+    "--aksara-border": "#145374",
+    "--aksara-text": "#f1f5f9",
+    "--aksara-muted": "#b6d6e6",
+    "--aksara-accent": "#22d3ee",
+    "--aksara-accent2": "#38bdf8",
+    "--aksara-danger": "#fb7185",
+  },
+  emerald: {
+    "--aksara-bg": "#011b14",
+    "--aksara-panel": "#052e24",
+    "--aksara-panel2": "#064e3b",
+    "--aksara-border": "#0f766e",
+    "--aksara-text": "#ecfdf5",
+    "--aksara-muted": "#a7f3d0",
+    "--aksara-accent": "#34d399",
+    "--aksara-accent2": "#22c55e",
+    "--aksara-danger": "#fb7185",
+  },
+  violet: {
+    "--aksara-bg": "#11071f",
+    "--aksara-panel": "#1e1233",
+    "--aksara-panel2": "#2e1065",
+    "--aksara-border": "#6d28d9",
+    "--aksara-text": "#faf5ff",
+    "--aksara-muted": "#c4b5fd",
+    "--aksara-accent": "#a78bfa",
+    "--aksara-accent2": "#22d3ee",
+    "--aksara-danger": "#f43f5e",
+  },
+  amber: {
+    "--aksara-bg": "#1c1202",
+    "--aksara-panel": "#2a1b05",
+    "--aksara-panel2": "#3f2a09",
+    "--aksara-border": "#92400e",
+    "--aksara-text": "#fff7ed",
+    "--aksara-muted": "#fed7aa",
+    "--aksara-accent": "#f59e0b",
+    "--aksara-accent2": "#22c55e",
+    "--aksara-danger": "#ef4444",
+  },
+  graphite: {
+    "--aksara-bg": "#09090b",
+    "--aksara-panel": "#18181b",
+    "--aksara-panel2": "#27272a",
+    "--aksara-border": "#3f3f46",
+    "--aksara-text": "#fafafa",
+    "--aksara-muted": "#a1a1aa",
+    "--aksara-accent": "#e5e7eb",
+    "--aksara-accent2": "#06b6d4",
+    "--aksara-danger": "#f87171",
+  },
+  plasma: {
+    "--aksara-bg": "#140014",
+    "--aksara-panel": "#250025",
+    "--aksara-panel2": "#3b093b",
+    "--aksara-border": "#be185d",
+    "--aksara-text": "#fff1f2",
+    "--aksara-muted": "#f9a8d4",
+    "--aksara-accent": "#f472b6",
+    "--aksara-accent2": "#22d3ee",
+    "--aksara-danger": "#fb7185",
+  },
+  navy: {
+    "--aksara-bg": "#050816",
+    "--aksara-panel": "#0b132b",
+    "--aksara-panel2": "#1c2541",
+    "--aksara-border": "#3a506b",
+    "--aksara-text": "#f8fafc",
+    "--aksara-muted": "#a3b3c7",
+    "--aksara-accent": "#5bc0be",
+    "--aksara-accent2": "#6fffe9",
+    "--aksara-danger": "#ff6b6b",
+  },
+};
+
+function applyTheme(theme: string) {
+  const root = document.documentElement;
+  const selected = themeVars[theme] || themeVars.obsidian;
+
+  root.setAttribute("data-aksara-theme", theme);
+  Object.entries(selected).forEach(([key, value]) => {
+    root.style.setProperty(key, value);
+  });
+}
+
+function translateTextNode(node: Node, dict: Record<string, string>) {
+  if (!node.textContent) return;
+
+  const original = node.textContent.trim();
+  if (!original) return;
+
+  const replacement = dict[original];
+  if (replacement) {
+    node.textContent = node.textContent.replace(original, replacement);
+  }
+}
+
+function translateElementTree(root: ParentNode, lang: Lang) {
+  const dict = dictionaries[lang] || dictionaries.id;
+
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        const tag = parent.tagName.toLowerCase();
+        if (["script", "style", "textarea", "code", "pre"].includes(tag)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    }
+  );
+
+  const nodes: Node[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach((node) => translateTextNode(node, dict));
+
+  document.querySelectorAll<HTMLInputElement>("input[placeholder]").forEach((input) => {
+    const placeholder = input.getAttribute("placeholder");
+    if (placeholder && dict[placeholder]) input.setAttribute("placeholder", dict[placeholder]);
+  });
+}
+
+export function EnterpriseRuntimeShell() {
+  useEffect(() => {
+    const applyAll = () => {
+      const lang = (localStorage.getItem("aksara-lang") || defaultLang) as Lang;
+      const theme = localStorage.getItem("aksara-theme") || "obsidian";
+
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+
+      applyTheme(theme);
+      translateElementTree(document.body, lang);
+    };
+
+    applyAll();
+
+    const observer = new MutationObserver(() => {
+      window.requestAnimationFrame(applyAll);
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    const onLang = () => applyAll();
+    const onStorage = () => applyAll();
+
+    window.addEventListener("aksara-lang-change", onLang);
+    window.addEventListener("aksara-theme-change", onLang);
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("aksara-lang-change", onLang);
+      window.removeEventListener("aksara-theme-change", onLang);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  return null;
+}

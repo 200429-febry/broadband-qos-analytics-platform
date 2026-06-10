@@ -1,0 +1,11 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+  - 'build'
+  - '-t'
+  - 'asia-southeast2-docker.pkg.dev/gen-lang-client-0341860128/qos-platform/qos-collector:latest'
+  - '-f'
+  - 'docker/collector.Dockerfile'
+  - '.'
+images:
+- 'asia-southeast2-docker.pkg.dev/gen-lang-client-0341860128/qos-platform/qos-collector:latest'

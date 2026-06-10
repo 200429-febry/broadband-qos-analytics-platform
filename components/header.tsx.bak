@@ -1,0 +1,47 @@
+"use client";
+
+import { Bell, LogOut, ShieldAlert } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { GlobalSearch } from "@/components/global-search";
+
+export function Header() {
+  const router = useRouter();
+
+  const logout = () => {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    router.push("/login");
+  };
+
+  return (
+    <header className="sticky top-0 z-[2000] border-b border-slate-800 bg-slate-950/90 backdrop-blur-xl">
+      <div className="flex h-16 items-center justify-between gap-4 px-6">
+        <GlobalSearch />
+
+        <div className="flex items-center gap-4">
+          <div className="hidden items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-red-400 md:flex">
+            <span className="h-3 w-3 rounded-full bg-red-500 shadow-[0_0_16px_rgba(239,68,68,0.9)]" />
+            <ShieldAlert className="h-4 w-4" />
+            System Critical
+          </div>
+
+          <div className="relative">
+            <Bell className="h-5 w-5 text-slate-400" />
+            <span className="absolute -right-2 -top-2 rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
+              11
+            </span>
+          </div>
+
+          <button
+            onClick={logout}
+            className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+          >
+            <LogOut className="h-4 w-4" />
+            Logout
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}

@@ -1,0 +1,384 @@
+"use client";
+
+import { QoeEngineerLab } from "@/components/enterprise-chart-packs";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+
+const API_URL = "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+type ProbeSample = {
+  time: string;
+  latency: number;
+  jitter: number;
+  downloadMbps: number;
+  uploadMbps: number;
+  backendMs: number;
+  qoeScore: number;
+  status: string;
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function calculateQoe(
+  latency: number,
+  jitter: number,
+  downloadMbps: number,
+  uploadMbps: number
+) {
+  const latencyPenalty = latency > 80 ? (latency - 80) * 0.18 : 0;
+  const jitterPenalty = jitter > 20 ? (jitter - 20) * 0.7 : 0;
+  const downloadPenalty = downloadMbps < 8 ? (8 - downloadMbps) * 6 : 0;
+  const uploadPenalty = uploadMbps < 2 ? (2 - uploadMbps) * 5 : 0;
+
+  return Math.round(
+    clamp(100 - latencyPenalty - jitterPenalty - downloadPenalty - uploadPenalty, 0, 100)
+  );
+}
+
+function getStatus(score: number) {
+  if (score >= 90) return "EXCELLENT";
+  if (score >= 75) return "STABLE";
+  if (score >= 60) return "BUFFER RISK";
+  return "POOR";
+}
+
+function MetricCard({
+  label,
+  value,
+  unit,
+}: {
+  label: string;
+  value: string | number;
+  unit?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl">
+      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{label}</p>
+      <div className="mt-3 flex items-end gap-2">
+        <span className="text-4xl font-black text-white">{value}</span>
+        {unit ? <span className="mb-1 text-sm text-slate-400">{unit}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+export default function StreamingQoePage() {
+  const [running, setRunning] = useState(true);
+  const [samples, setSamples] = useState<ProbeSample[]>([]);
+  const [lastError, setLastError] = useState("");
+  const lastLatencyRef = useRef<number | null>(null);
+
+  const latest = samples[0];
+
+  const averages = useMemo(() => {
+    if (!samples.length) {
+      return {
+        latency: 0,
+        jitter: 0,
+        downloadMbps: 0,
+        uploadMbps: 0,
+        qoeScore: 0,
+      };
+    }
+
+    const sum = samples.reduce(
+      (acc, item) => {
+        acc.latency += item.latency;
+        acc.jitter += item.jitter;
+        acc.downloadMbps += item.downloadMbps;
+        acc.uploadMbps += item.uploadMbps;
+        acc.qoeScore += item.qoeScore;
+        return acc;
+      },
+      {
+        latency: 0,
+        jitter: 0,
+        downloadMbps: 0,
+        uploadMbps: 0,
+        qoeScore: 0,
+      }
+    );
+
+    const n = samples.length;
+
+    return {
+      latency: +(sum.latency / n).toFixed(1),
+      jitter: +(sum.jitter / n).toFixed(1),
+      downloadMbps: +(sum.downloadMbps / n).toFixed(2),
+      uploadMbps: +(sum.uploadMbps / n).toFixed(2),
+      qoeScore: Math.round(sum.qoeScore / n),
+    };
+  }, [samples]);
+
+  async function measureLatency() {
+    const t0 = performance.now();
+    await fetch(`${API_URL}/api/qoe/ping?x=${Date.now()}`, {
+      cache: "no-store",
+    });
+    const latency = performance.now() - t0;
+
+    const previous = lastLatencyRef.current;
+    const jitter = previous === null ? 0 : Math.abs(latency - previous);
+    lastLatencyRef.current = latency;
+
+    return {
+      latency,
+      jitter,
+    };
+  }
+
+  async function measureDownload() {
+    const sizeKb = 2048;
+    const t0 = performance.now();
+
+    const response = await fetch(
+      `${API_URL}/api/qoe/download-fixed?size_kb=${sizeKb}&x=${Date.now()}`,
+      { cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      throw new Error("Download probe failed");
+    }
+
+    const buffer = await response.arrayBuffer();
+    const t1 = performance.now();
+
+    const durationS = Math.max((t1 - t0) / 1000, 0.001);
+    const mbps = (buffer.byteLength * 8) / durationS / 1_000_000;
+
+    return {
+      mbps,
+      backendMs: t1 - t0,
+    };
+  }
+
+  async function measureUpload() {
+    const size = 512 * 1024;
+    const payload = new Uint8Array(size);
+
+    for (let i = 0; i < payload.length; i += 65536) {
+      crypto.getRandomValues(payload.subarray(i, Math.min(i + 65536, payload.length)));
+    }
+
+    const t0 = performance.now();
+
+    await fetch(`${API_URL}/api/qoe/upload?x=${Date.now()}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+      },
+      body: payload,
+      cache: "no-store",
+    });
+
+    const t1 = performance.now();
+    const durationS = Math.max((t1 - t0) / 1000, 0.001);
+    const mbps = (payload.byteLength * 8) / durationS / 1_000_000;
+
+    return mbps;
+  }
+
+  async function runProbe() {
+    try {
+      setLastError("");
+
+      const latencyResult = await measureLatency();
+      const downloadResult = await measureDownload();
+      const uploadMbps = await measureUpload();
+
+      const latency = +latencyResult.latency.toFixed(1);
+      const jitter = +latencyResult.jitter.toFixed(1);
+      const downloadMbps = +downloadResult.mbps.toFixed(2);
+      const backendMs = +downloadResult.backendMs.toFixed(1);
+      const upload = +uploadMbps.toFixed(2);
+      const qoeScore = calculateQoe(latency, jitter, downloadMbps, upload);
+      const status = getStatus(qoeScore);
+
+      const sample: ProbeSample = {
+        time: new Date().toLocaleTimeString(),
+        latency,
+        jitter,
+        downloadMbps,
+        uploadMbps: upload,
+        backendMs,
+        qoeScore,
+        status,
+      };
+
+      setSamples((prev) => [sample, ...prev].slice(0, 30));
+
+      await fetch(`${API_URL}/api/qoe/sample`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(sample),
+      });
+    } catch (error) {
+      console.error(error);
+      setLastError("Probe failed. Check backend API or network connection.");
+    }
+  }
+
+  useEffect(() => {
+    if (!running) return;
+
+    runProbe();
+    const interval = setInterval(runProbe, 4000);
+
+    return () => clearInterval(interval);
+  }, [running]);
+
+  return (
+    <main className="min-h-screen bg-slate-950 p-6 text-white">
+      <div className="mb-6 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.35em] text-cyan-400">
+            Real Browser-Side Traffic Measurement
+          </p>
+          <h1 className="mt-2 text-4xl font-black">
+            Live Streaming QoE Monitor
+          </h1>
+          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-400">
+            Jalankan YouTube, video streaming, meeting, atau download besar di sisi kanan layar.
+            Dashboard ini akan mengirim traffic probe asli dari browser ke Cloud Run untuk membaca
+            latency, jitter, throughput download, throughput upload, backend response time, dan QoE score secara real-time.
+          </p>
+        </div>
+
+        <div className="flex gap-3">
+          <button
+            onClick={() => setRunning((value) => !value)}
+            className="rounded-xl bg-cyan-500 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-cyan-400"
+          >
+            {running ? "Pause Probe" : "Start Probe"}
+          </button>
+
+          <a
+            href="https://www.youtube.com"
+            target="_blank"
+            className="rounded-xl border border-slate-700 px-5 py-3 text-sm font-bold text-slate-200 hover:bg-slate-900"
+          >
+            Open YouTube
+          </a>
+        </div>
+      </div>
+
+      {lastError ? (
+        <div className="mb-5 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-300">
+          {lastError}
+        </div>
+      ) : null}
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <MetricCard label="QoE Score" value={latest?.qoeScore ?? 0} />
+        <MetricCard label="Status" value={latest?.status ?? "WAIT"} />
+        <MetricCard label="Latency" value={latest?.latency ?? 0} unit="ms" />
+        <MetricCard label="Jitter" value={latest?.jitter ?? 0} unit="ms" />
+        <MetricCard label="Download" value={latest?.downloadMbps ?? 0} unit="Mbps" />
+        <MetricCard label="Upload" value={latest?.uploadMbps ?? 0} unit="Mbps" />
+      </section>
+
+      <section className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/60 p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-black">Live Probe Samples</h2>
+              <p className="text-sm text-slate-500">
+                Data ini berasal dari traffic asli browser ke backend Cloud Run.
+              </p>
+            </div>
+            <div className="rounded-full bg-emerald-500/10 px-4 py-2 text-xs font-bold text-emerald-300">
+              {running ? "RUNNING" : "PAUSED"}
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-950 text-xs uppercase tracking-[0.18em] text-slate-500">
+                <tr>
+                  <th className="p-3">Time</th>
+                  <th className="p-3">QoE</th>
+                  <th className="p-3">Latency</th>
+                  <th className="p-3">Jitter</th>
+                  <th className="p-3">Down</th>
+                  <th className="p-3">Up</th>
+                  <th className="p-3">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {samples.length === 0 ? (
+                  <tr>
+                    <td className="p-4 text-slate-500" colSpan={7}>
+                      Waiting for first real probe sample...
+                    </td>
+                  </tr>
+                ) : (
+                  samples.map((sample, index) => (
+                    <tr key={`${sample.time}-${index}`} className="border-t border-slate-800">
+                      <td className="p-3 text-slate-400">{sample.time}</td>
+                      <td className="p-3 font-bold text-cyan-300">{sample.qoeScore}</td>
+                      <td className="p-3">{sample.latency} ms</td>
+                      <td className="p-3">{sample.jitter} ms</td>
+                      <td className="p-3">{sample.downloadMbps} Mbps</td>
+                      <td className="p-3">{sample.uploadMbps} Mbps</td>
+                      <td className="p-3 font-bold text-emerald-300">{sample.status}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/60 p-6">
+          <h2 className="text-xl font-black">Streaming Test Scenario</h2>
+          <p className="mt-3 text-sm leading-6 text-slate-400">
+            Untuk pengujian nyata, buka YouTube atau platform streaming di samping dashboard ini.
+            Saat video berjalan, dashboard akan melakukan active probing ke Cloud Run.
+            Jika jaringan sedang berat, buffering, atau koneksi tidak stabil, nilai latency, jitter,
+            download throughput, dan QoE score akan berubah secara langsung.
+          </p>
+
+          <div className="mt-5 rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-5">
+            <p className="text-xs uppercase tracking-[0.25em] text-cyan-300">
+              Current Average
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-slate-500">Avg QoE</p>
+                <p className="text-3xl font-black">{averages.qoeScore}</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Avg Download</p>
+                <p className="text-3xl font-black">{averages.downloadMbps} Mbps</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Avg Latency</p>
+                <p className="text-3xl font-black">{averages.latency} ms</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Avg Jitter</p>
+                <p className="text-3xl font-black">{averages.jitter} ms</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950 p-5 text-sm leading-6 text-slate-400">
+            <p className="font-bold text-white">Cara demo:</p>
+            <ol className="mt-2 list-decimal space-y-2 pl-5">
+              <li>Buka halaman ini di sebelah kiri layar.</li>
+              <li>Buka YouTube di sebelah kanan layar.</li>
+              <li>Putar video 1080p atau 4K.</li>
+              <li>Amati QoE score, latency, jitter, dan throughput.</li>
+              <li>Jika video buffering, cek apakah jitter naik atau download Mbps turun.</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+          <QoeEngineerLab />
+    </main>
+  );
+}

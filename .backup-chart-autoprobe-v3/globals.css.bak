@@ -1,0 +1,467 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-200 antialiased font-sans selection:bg-emerald-500/30;
+  }
+}
+
+/* Custom scrollbar for webkit */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+html[data-font="small"] body {
+  font-size: 14px;
+}
+
+html[data-font="medium"] body {
+  font-size: 16px;
+}
+
+html[data-font="large"] body {
+  font-size: 18px;
+}
+
+html[data-theme="light"] body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+html[data-theme="dark"] body {
+  background: #020617;
+  color: #f8fafc;
+}
+
+html[data-theme="light"] body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+html[data-theme="light"] .bg-slate-950,
+html[data-theme="light"] .bg-slate-950\/80 {
+  background-color: #f8fafc !important;
+}
+
+html[data-theme="light"] .bg-slate-900,
+html[data-theme="light"] .bg-slate-900\/50 {
+  background-color: #ffffff !important;
+}
+
+html[data-theme="light"] .text-white,
+html[data-theme="light"] .text-slate-100,
+html[data-theme="light"] .text-slate-200,
+html[data-theme="light"] .text-slate-300 {
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .text-slate-400,
+html[data-theme="light"] .text-slate-500 {
+  color: #475569 !important;
+}
+
+html[data-theme="light"] .border-slate-800,
+html[data-theme="light"] .border-white\/10 {
+  border-color: #cbd5e1 !important;
+}
+
+html[data-font="small"] body {
+  font-size: 14px;
+}
+
+html[data-font="medium"] body {
+  font-size: 16px;
+}
+
+html[data-font="large"] body {
+  font-size: 18px;
+}
+
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  z-index: 0;
+}
+
+.leaflet-pane {
+  z-index: 10;
+}
+/* Coverage map hardening */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  background: #020617 !important;
+}
+
+.leaflet-pane,
+.leaflet-map-pane,
+.leaflet-tile-pane {
+  background: transparent !important;
+}
+
+.leaflet-tile-container img {
+  max-width: none !important;
+}
+
+/* Leaflet hard fix for Next.js standalone / Cloud Run */
+.leaflet-container {
+  position: relative !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  background: #020617 !important;
+  z-index: 0 !important;
+}
+
+.leaflet-pane,
+.leaflet-map-pane,
+.leaflet-tile-pane,
+.leaflet-overlay-pane,
+.leaflet-shadow-pane,
+.leaflet-marker-pane,
+.leaflet-tooltip-pane,
+.leaflet-popup-pane {
+  position: absolute !important;
+  left: 0;
+  top: 0;
+}
+
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+  position: absolute !important;
+  left: 0;
+  top: 0;
+}
+
+.leaflet-tile-container {
+  position: absolute !important;
+  left: 0;
+  top: 0;
+}
+
+.leaflet-control-container {
+  position: absolute !important;
+  inset: 0;
+  pointer-events: none;
+}
+
+.leaflet-control {
+  pointer-events: auto;
+}
+
+.leaflet-top,
+.leaflet-bottom {
+  position: absolute !important;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.leaflet-top {
+  top: 0;
+}
+
+.leaflet-bottom {
+  bottom: 0;
+}
+
+.leaflet-left {
+  left: 0;
+}
+
+.leaflet-right {
+  right: 0;
+}
+
+.leaflet-left .leaflet-control {
+  margin-left: 10px;
+}
+
+.leaflet-top .leaflet-control {
+  margin-top: 10px;
+}
+
+
+/* Export safety: floating live widgets must never appear in print/PDF export */
+@media print {
+  .no-print,
+  [data-export-ignore="true"],
+  .aksara-floating-live-shell {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  body {
+    background: white !important;
+  }
+}
+
+/* AKSARA Enterprise Theme Runtime */
+html[data-aksara-theme] body {
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--aksara-accent) 14%, transparent), transparent 32rem),
+    radial-gradient(circle at bottom left, color-mix(in srgb, var(--aksara-accent2) 12%, transparent), transparent 30rem),
+    var(--aksara-bg) !important;
+  color: var(--aksara-text) !important;
+}
+
+html[data-aksara-theme] main,
+html[data-aksara-theme] .bg-slate-950,
+html[data-aksara-theme] .bg-slate-950\/95 {
+  background-color: var(--aksara-bg) !important;
+}
+
+html[data-aksara-theme] .bg-slate-900,
+html[data-aksara-theme] .bg-slate-900\/70,
+html[data-aksara-theme] .bg-slate-900\/80,
+html[data-aksara-theme] .bg-slate-900\/90 {
+  background-color: color-mix(in srgb, var(--aksara-panel) 86%, transparent) !important;
+}
+
+html[data-aksara-theme] .bg-slate-800,
+html[data-aksara-theme] .bg-slate-800\/70,
+html[data-aksara-theme] .bg-slate-800\/80 {
+  background-color: var(--aksara-panel2) !important;
+}
+
+html[data-aksara-theme] .border-slate-800,
+html[data-aksara-theme] .border-slate-700 {
+  border-color: color-mix(in srgb, var(--aksara-border) 86%, #ffffff 8%) !important;
+}
+
+html[data-aksara-theme] .text-cyan-300,
+html[data-aksara-theme] .text-cyan-400 {
+  color: var(--aksara-accent) !important;
+}
+
+html[data-aksara-theme] .text-emerald-300,
+html[data-aksara-theme] .text-emerald-400 {
+  color: var(--aksara-accent2) !important;
+}
+
+html[data-aksara-theme] .text-slate-400,
+html[data-aksara-theme] .text-slate-500 {
+  color: var(--aksara-muted) !important;
+}
+
+html[data-aksara-theme] button,
+html[data-aksara-theme] select,
+html[data-aksara-theme] input {
+  color-scheme: dark;
+}
+
+html[data-aksara-theme] a:hover,
+html[data-aksara-theme] button:hover {
+  filter: brightness(1.08);
+}
+
+html[data-aksara-theme] svg text {
+  font-family: inherit;
+}
+
+/* AKSARA Runtime Settings v2 */
+html[data-aksara-font="compact"] body {
+  font-size: calc(0.92rem * var(--aksara-font-scale, 1));
+}
+
+html[data-aksara-font="normal"] body {
+  font-size: calc(1rem * var(--aksara-font-scale, 1));
+}
+
+html[data-aksara-font="large"] body {
+  font-size: calc(1.06rem * var(--aksara-font-scale, 1));
+}
+
+html[data-aksara-font="presentation"] body {
+  font-size: calc(1.12rem * var(--aksara-font-scale, 1));
+}
+
+html[data-aksara-density="compact"] .rounded-3xl {
+  border-radius: 1rem;
+}
+
+html[data-aksara-density="comfortable"] .rounded-3xl {
+  border-radius: 1.25rem;
+}
+
+html[data-aksara-density="spacious"] .rounded-3xl {
+  border-radius: 1.65rem;
+}
+
+html[data-aksara-theme] body,
+html[data-aksara-theme] main {
+  background-color: var(--aksara-bg) !important;
+}
+
+html[data-aksara-theme] .bg-slate-900\/70,
+html[data-aksara-theme] .bg-slate-900\/80,
+html[data-aksara-theme] .bg-slate-900\/90,
+html[data-aksara-theme] .bg-slate-900 {
+  background-color: color-mix(in srgb, var(--aksara-panel) 90%, transparent) !important;
+}
+
+html[data-aksara-theme] .bg-slate-950,
+html[data-aksara-theme] .bg-slate-950\/70,
+html[data-aksara-theme] .bg-slate-950\/80,
+html[data-aksara-theme] .bg-slate-950\/90 {
+  background-color: color-mix(in srgb, var(--aksara-bg) 96%, var(--aksara-panel) 4%) !important;
+}
+
+html[data-aksara-theme] .border-slate-800,
+html[data-aksara-theme] .border-slate-700 {
+  border-color: color-mix(in srgb, var(--aksara-border) 82%, #ffffff 8%) !important;
+}
+
+/* AKSARA working settings behavior */
+html[data-aksara-chart-mode="executive-clean"] svg {
+  max-height: var(--aksara-chart-height, 260px);
+  opacity: var(--aksara-chart-opacity, 0.92);
+}
+
+html[data-aksara-chart-mode="engineer-dense"] svg {
+  max-height: var(--aksara-chart-height, 360px);
+  filter: contrast(1.08) saturate(1.1);
+}
+
+html[data-aksara-chart-mode="presentation"] svg {
+  max-height: var(--aksara-chart-height, 420px);
+  filter: contrast(1.15) saturate(1.15);
+}
+
+html[data-aksara-animation-mode="reduced"] *,
+html[data-aksara-reduced-motion="true"] * {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+html[data-aksara-animation-mode="enhanced"] .rounded-3xl,
+html[data-aksara-animation-mode="enhanced"] .rounded-2xl {
+  transition: transform var(--aksara-motion-speed, 0.35s), border-color var(--aksara-motion-speed, 0.35s), background var(--aksara-motion-speed, 0.35s);
+}
+
+html[data-aksara-animation-mode="enhanced"] .rounded-3xl:hover,
+html[data-aksara-animation-mode="enhanced"] .rounded-2xl:hover {
+  transform: translateY(-2px);
+}
+
+html[data-aksara-map-mode="standard"] .leaflet-container {
+  filter: saturate(0.95) contrast(1);
+}
+
+html[data-aksara-map-mode="rf-planning"] .leaflet-container {
+  filter: saturate(1.18) contrast(1.12);
+}
+
+html[data-aksara-map-mode="atoll-like"] .leaflet-container {
+  filter: saturate(1.25) contrast(1.18) hue-rotate(8deg);
+}
+
+html[data-aksara-map-mode="cellmapper-like"] .leaflet-container {
+  filter: saturate(1.35) contrast(1.08);
+}
+
+html[data-aksara-map-mode] .leaflet-container::after {
+  content: "Mode: " var(--aksara-map-mode-label) " | Radius: " var(--aksara-coverage-radius-km) " km";
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  z-index: 900;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.82);
+  color: #67e8f9;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  pointer-events: none;
+}
+
+html[data-aksara-density="compact"] main {
+  --aksara-gap: 0.75rem;
+}
+
+html[data-aksara-density="spacious"] main {
+  --aksara-gap: 1.5rem;
+}
+
+html[data-aksara-font-profile="compact"] body {
+  font-size: 14px;
+}
+
+html[data-aksara-font-profile="large"] body {
+  font-size: 17px;
+}
+
+html[data-aksara-font-profile="presentation"] body {
+  font-size: 18px;
+}
+
+/* Per-device QoE session marker */
+html::before {
+  content: "Per-device QoE session active";
+  position: fixed;
+  right: 18px;
+  bottom: 72px;
+  z-index: 9998;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.85);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  color: #67e8f9;
+  font-size: 11px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  html::before {
+    right: 12px;
+    bottom: 58px;
+    font-size: 10px;
+  }
+}
+
+/* Force per-device session visibility */
+html::after {
+  content: "Device session isolated";
+  position: fixed;
+  right: 18px;
+  bottom: 72px;
+  z-index: 9998;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.88);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  color: #67e8f9;
+  font-size: 11px;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  html::after {
+    right: 12px;
+    bottom: 58px;
+    font-size: 10px;
+  }
+}

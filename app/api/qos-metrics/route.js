@@ -1,0 +1,30 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const runtime = "nodejs";
+
+const API_URL = "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+export async function GET() {
+  try {
+    const res = await fetch(API_URL + "/api/qos/metrics", { cache: "no-store" });
+    const data = await res.json();
+
+    return Response.json(data || {}, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch {
+    return Response.json({
+      throughput: 0,
+      latency: 0,
+      jitter: 0,
+      packet_loss: 0,
+      bandwidth: 0,
+      source: "global-qoe-probe",
+      qoe_score: 0,
+      streaming_status: "WAITING",
+      timestamp: "-"
+    }, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+}

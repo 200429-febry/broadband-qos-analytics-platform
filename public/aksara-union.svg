@@ -1,0 +1,6 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <rect width="128" height="128" rx="28" fill="white"/>
+  <path d="M25 85 L52 35 L68 65 L82 42 L105 85" fill="none" stroke="#0ea5e9" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="68" cy="65" r="6" fill="#10b981"/>
+  <text x="64" y="105" text-anchor="middle" font-family="Arial" font-size="14" font-weight="700" fill="#0f172a">AKSARA</text>
+</svg>

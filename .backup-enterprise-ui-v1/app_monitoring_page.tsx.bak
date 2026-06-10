@@ -1,0 +1,141 @@
+"use client";
+
+import { TechnicalChartGrid } from "@/components/technical-chart-grid";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Metric = {
+  throughput: number;
+  latency: number;
+  jitter: number;
+  packet_loss: number;
+  bandwidth?: number;
+  qoe_score?: number;
+  source?: string;
+  streaming_status?: string;
+  timestamp?: string;
+};
+
+type HistoryItem = Metric & { timestamp?: string };
+
+function Card({ label, value, unit }: { label: string; value: string | number; unit?: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+      <p className="text-sm text-slate-400">{label}</p>
+      <div className="mt-3 flex items-end gap-2">
+        <span className="text-3xl font-black text-white">{value}</span>
+        {unit ? <span className="mb-1 text-sm text-slate-400">{unit}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+export default function MonitoringPage() {
+  const [metric, setMetric] = useState<Metric | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [error, setError] = useState("");
+
+  const fetchData = async () => {
+    try {
+      setError("");
+      const [metricRes, historyRes] = await Promise.all([
+        fetch(`/api/qos-metrics?x=${Date.now()}`, { cache: "no-store" }),
+        fetch(`/api/qos-history?x=${Date.now()}`, { cache: "no-store" }),
+      ]);
+
+      const metricJson = await metricRes.json();
+      const historyJson = await historyRes.json();
+
+      setMetric(metricJson);
+      setHistory(Array.isArray(historyJson) ? historyJson : []);
+    } catch {
+      setError("Failed to load real QoE telemetry.");
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const status = useMemo(() => {
+    if (!metric) return "WAITING";
+    if (metric.source === "real-qoe-probe") return "CONNECTED";
+    return "WAITING";
+  }, [metric]);
+
+  return (
+    <main className="space-y-8 p-6 text-white">
+      <div>
+        <h1 className="text-3xl font-black">Realtime Telemetry Monitor</h1>
+        <p className="mt-2 text-slate-400">
+          Technical live stream view for real browser-side QoE telemetry, update timestamps, metric events, and engineering-level troubleshooting.
+        </p>
+      </div>
+
+      {error ? <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-300">{error}</div> : null}
+
+      <section className="grid gap-4 md:grid-cols-4">
+        <Card label="Stream State" value={status} />
+        <Card label="Last Update" value={metric?.timestamp || "-"} />
+        <Card label="Latest Status" value={metric?.streaming_status || "WAITING"} />
+        <Card label="Samples Buffered" value={history.length} />
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-4">
+        <Card label="Avg Latency" value={metric?.latency ?? 0} unit="ms" />
+        <Card label="Avg Packet Loss" value={metric?.packet_loss ?? 0} unit="%" />
+        <Card label="Avg Jitter" value={metric?.jitter ?? 0} unit="ms" />
+        <Card label="Peak Throughput" value={metric?.throughput ?? 0} unit="Mbps" />
+      </section>
+
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/60 p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-black">Raw Telemetry Stream</h2>
+            <p className="text-sm text-slate-400">Latest real QoE samples received from the browser-to-Cloud Run probe.</p>
+          </div>
+          <span className="rounded-full bg-emerald-500/10 px-4 py-2 text-xs font-bold text-emerald-300">{status}</span>
+        </div>
+
+        <div className="overflow-hidden rounded-2xl border border-slate-800">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-950 text-xs uppercase tracking-[0.2em] text-slate-500">
+              <tr>
+                <th className="p-3">Timestamp</th>
+                <th className="p-3">Throughput</th>
+                <th className="p-3">Latency</th>
+                <th className="p-3">Jitter</th>
+                <th className="p-3">Packet Loss</th>
+                <th className="p-3">State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.length === 0 ? (
+                <tr><td colSpan={6} className="p-5 text-center text-slate-500">Waiting for real telemetry samples...</td></tr>
+              ) : (
+                history.slice(0, 12).map((item, index) => (
+                  <tr key={index} className="border-t border-slate-800">
+                    <td className="p-3 text-slate-400">{item.timestamp || "-"}</td>
+                    <td className="p-3">{item.throughput} Mbps</td>
+                    <td className="p-3">{item.latency} ms</td>
+                    <td className="p-3">{item.jitter} ms</td>
+                    <td className="p-3">{item.packet_loss}%</td>
+                    <td className="p-3 font-bold text-emerald-300">{item.source || "REAL"}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/60 p-6">
+        <h2 className="text-xl font-black">Engineering Event Log</h2>
+        <p className="mt-2 text-sm text-slate-400">This monitor now uses real browser-side traffic probe data from the Streaming QoE module.</p>
+      </section>
+          <TechnicalChartGrid scope="realtime" />
+    </main>
+  );
+}

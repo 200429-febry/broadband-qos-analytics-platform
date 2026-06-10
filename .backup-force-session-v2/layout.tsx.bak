@@ -1,0 +1,33 @@
+import type { Metadata } from "next";
+import "./globals.css";
+import "leaflet/dist/leaflet.css";
+import { AppShell } from "@/components/app-shell";
+import { GlobalQoeProbe } from "@/components/global-qoe-probe";
+import { AksaraLiveShell } from "@/components/aksara-live-shell";
+import { EnterpriseRuntimeShell } from "@/components/enterprise-runtime-shell";
+import { GlobalSettingsController } from "@/components/global-settings-controller";
+import { DeviceSessionController } from "@/components/device-session-controller";
+
+export const metadata: Metadata = {
+  title: "QoS Analytics Platform",
+  description: "Aksara Union QoS Analytics & Prediction Platform",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>
+        <AppShell>{children}</AppShell>
+                          <GlobalQoeProbe />
+        <AksaraLiveShell />
+              <EnterpriseRuntimeShell />
+              <GlobalSettingsController />
+              <DeviceSessionController />
+      </body>
+    </html>
+  );
+}

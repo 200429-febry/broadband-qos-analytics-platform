@@ -1,0 +1,134 @@
+"use client";
+
+import {
+  Database,
+  ExternalLink,
+  FileSearch,
+  Server,
+  Activity,
+  ShieldCheck,
+} from "lucide-react";
+
+const GCP_PROJECT_ID = "gen-lang-client-0341860128";
+const REGION = "asia-southeast2";
+const API_URL = "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+function cloudConsole(path: string) {
+  const joiner = path.includes("?") ? "&" : "?";
+  return `https://console.cloud.google.com/${path}${joiner}project=${GCP_PROJECT_ID}`;
+}
+
+const proofLinks = [
+  {
+    title: "Open Cloud SQL Instance",
+    desc: "Bukti database PostgreSQL qos-db yang dipakai aplikasi.",
+    href: cloudConsole("sql/instances/qos-db/overview"),
+    icon: Database,
+    color: "text-emerald-300",
+  },
+  {
+    title: "Open Cloud SQL Databases",
+    desc: "Melihat daftar database/tabel operasional Cloud SQL.",
+    href: cloudConsole("sql/instances/qos-db/databases"),
+    icon: Server,
+    color: "text-cyan-300",
+  },
+  {
+    title: "Open BigQuery Analytics",
+    desc: "Bukti dataset analytics / telemetry warehouse.",
+    href: cloudConsole("bigquery?ws=!1m0"),
+    icon: FileSearch,
+    color: "text-yellow-300",
+  },
+  {
+    title: "Open API Service Console",
+    desc: "Bukti backend FastAPI Cloud Run yang membaca data.",
+    href: cloudConsole(`run/detail/${REGION}/qos-api/metrics`),
+    icon: Activity,
+    color: "text-purple-300",
+  },
+  {
+    title: "Open API Logs",
+    desc: "Melihat request real-time dari dashboard ke backend.",
+    href: cloudConsole(`run/detail/${REGION}/qos-api/logs`),
+    icon: ShieldCheck,
+    color: "text-red-300",
+  },
+  {
+    title: "Open Raw QoE History",
+    desc: "Endpoint JSON real telemetry yang dipakai dashboard.",
+    href: `${API_URL}/api/qos/history`,
+    icon: Database,
+    color: "text-blue-300",
+  },
+];
+
+export function GcpDatabaseProofButtons() {
+  return (
+    <section className="mb-6 rounded-3xl border border-cyan-500/30 bg-cyan-500/5 p-6">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-black text-cyan-300">
+            Database Proof / Lecturer Evidence
+          </h2>
+          <p className="mt-2 max-w-4xl text-sm text-slate-400">
+            Tombol ini membuka bukti langsung di Google Cloud Console dan endpoint real telemetry.
+            Gunakan saat presentasi untuk menunjukkan bahwa dashboard memakai Cloud SQL, BigQuery,
+            Cloud Run API, dan data QoE real-time, bukan sekadar tampilan statis.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-xs text-slate-300">
+          <p>
+            Project: <span className="font-bold text-cyan-300">{GCP_PROJECT_ID}</span>
+          </p>
+          <p>
+            Region: <span className="font-bold text-emerald-300">{REGION}</span>
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {proofLinks.map((item) => {
+          const Icon = item.icon;
+
+          return (
+            <a
+              key={item.title}
+              href={item.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group rounded-2xl border border-slate-800 bg-slate-900/80 p-5 transition hover:border-cyan-500/60 hover:bg-slate-900"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex gap-4">
+                  <div className="rounded-xl border border-slate-700 bg-slate-950 p-3">
+                    <Icon className={`h-5 w-5 ${item.color}`} />
+                  </div>
+
+                  <div>
+                    <h3 className="font-black text-white group-hover:text-cyan-300">
+                      {item.title}
+                    </h3>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                      {item.desc}
+                    </p>
+                  </div>
+                </div>
+
+                <ExternalLink className="h-4 w-4 shrink-0 text-slate-500 group-hover:text-cyan-300" />
+              </div>
+            </a>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+        <p className="text-sm font-bold text-white">Command bukti cepat untuk dosen:</p>
+        <pre className="mt-3 overflow-x-auto rounded-xl bg-black/40 p-4 text-xs text-cyan-200">
+{{"throughput":45.2,"latency":101.5,"jitter":54.6,"packet_loss":0.2,"bandwidth":45.2,"source":"real-qoe-probe","qoe_score":72.0,"streaming_status":"BUFFER RISK","timestamp":"11:21:35 PM"}[{"throughput":45.2,"latency":101.5,"jitter":54.6,"packet_loss":0.2,"bandwidth":45.2,"qoe_score":72.0,"source":"real-qoe-probe","timestamp":"11:21:35 PM"},{"throughput":46.86,"latency":46.9,"jitter":2.4,"packet_loss":0.0,"bandwidth":46.86,"qoe_score":100.0,"source":"real-qoe-probe","timestamp":"11:21:32 PM"},{"throughput":45.89,"latency":44.5,"jitter":3.3,"packet_loss":0.0,"bandwidth":45.89,"qoe_score":100.0,"source":"real-qoe-probe","timestamp":"11:21:27 PM"},{"throughput":44.43,"latency":47.8,"jitter":1.8,"packet_loss":0.0,"bandwidth":44.43,"qoe_score":100.0,"source":"real-qoe-probe","timestamp":"11:21:22 PM"},{"throughput":43.37,"latency":49.6,"jitter":2.6,"packet_loss":0.0,"bandwidth":43.37,"qoe_score":100.0,"source":"real-qoe-probe","timestamp":"11:21:17 PM"},{"throughput":42.37,"late{"count":130,"samples":[{"id":"2c171859-987f-47c1-914a-1df3e07daf03","timestamp":1780935695.1742084,"time":"11:21:35 PM","latency":101.5,"jitter":54.6,"downloadMbps":45.2,"uploadMbps":8.46,"backendMs":101.5,"qoeScore":72,"status":"BUFFER RISK","source":"global-real-qoe-probe"},{"id":"c0f32f2b-3715-4d00-8ccf-9b4f5dc68c85","timestamp":1780935692.9768908,"time":"11:21:32 PM","latency":46.9,"jitter":2.4,"downloadMbps":46.86,"uploadMbps":9.43,"backendMs":46.9,"qoeScore":100,"status":"EXCELLENT","source":"global-real-qoe-probe"},{"id":"05c78826-07ff-4750-b590-e668e91d4cbf","timestamp":1780935687.960606,"time":"11:21:27 PM","latency":44.5,"jitter":3.3,"downloadMbps":45.89,"uploadMbps":9.72,"backendMs":44.5,"qoeScore":100,"status":"EXCELLENT","source":"global-real-qoe-probe"},{"id":"466f63d6-40d1-}
+        </pre>
+      </div>
+    </section>
+  );
+}

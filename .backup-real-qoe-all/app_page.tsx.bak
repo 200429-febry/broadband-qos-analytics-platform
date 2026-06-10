@@ -1,0 +1,127 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Activity, Gauge, Shield, Zap } from "lucide-react";
+import { RealtimeChart } from "@/components/dashboard/realtime-chart";
+
+type Metric = {
+  throughput?: number;
+  latency?: number;
+  jitter?: number;
+  packet_loss?: number;
+  bandwidth?: number;
+  qoe_score?: number;
+  source?: string;
+  streaming_status?: string;
+  timestamp?: string;
+};
+
+function KpiCard({
+  title,
+  value,
+  unit,
+  icon: Icon,
+}: {
+  title: string;
+  value: string | number;
+  unit?: string;
+  icon: any;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 shadow-xl">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-400">{title}</p>
+          <div className="mt-3 flex items-end gap-2">
+            <span className="text-4xl font-black text-white">{value}</span>
+            {unit ? <span className="mb-1 text-sm text-slate-400">{unit}</span> : null}
+          </div>
+        </div>
+        <div className="rounded-xl bg-cyan-500/10 p-3 text-cyan-300">
+          <Icon className="h-5 w-5" />
+        </div>
+      </div>
+      <p className="mt-4 text-xs text-emerald-400">↘ Real QoE probe source</p>
+    </div>
+  );
+}
+
+function SystemHealth() {
+  const rows = [
+    ["API Service", "24ms"],
+    ["Database", "12ms"],
+    ["ML Service", "85ms"],
+  ];
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+      <h2 className="text-xl font-black text-white">System Health</h2>
+      <div className="mt-6 space-y-4">
+        {rows.map(([name, latency]) => (
+          <div key={name} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/60 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              <span className="font-semibold text-slate-300">{name}</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="text-sm text-slate-500">{latency}</span>
+              <span className="rounded-md bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-300">
+                OPERATIONAL
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function DashboardPage() {
+  const [metric, setMetric] = useState<Metric | null>(null);
+
+  const fetchMetric = async () => {
+    try {
+      const res = await fetch(`/api/qos-metrics?x=${Date.now()}`, { cache: "no-store" });
+      const data = await res.json();
+      setMetric(data);
+    } catch {}
+  };
+
+  useEffect(() => {
+    fetchMetric();
+    const interval = setInterval(fetchMetric, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <main className="space-y-8 p-6 text-white">
+      <section>
+        <h1 className="text-3xl font-black">NOC Dashboard</h1>
+        <p className="mt-2 text-slate-400">Executive overview of global network Quality of Service.</p>
+      </section>
+
+      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <KpiCard title="Avg Throughput" value={metric?.throughput ?? 0} unit="Mbps" icon={Zap} />
+        <KpiCard title="Network Latency" value={metric?.latency ?? 0} unit="ms" icon={Activity} />
+        <KpiCard title="Packet Loss" value={metric?.packet_loss ?? 0} unit="%" icon={Shield} />
+        <KpiCard title="Jitter" value={metric?.jitter ?? 0} unit="ms" icon={Gauge} />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[1fr_420px]">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+          <h2 className="mb-4 text-xl font-black text-white">Network Throughput & Latency (Live)</h2>
+          <RealtimeChart />
+        </div>
+        <SystemHealth />
+      </section>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <p className="text-sm text-slate-400">
+          Current source: <span className="font-bold text-cyan-300">{metric?.source || "waiting"}</span>
+          {" "}• Streaming status: <span className="font-bold text-emerald-300">{metric?.streaming_status || "WAITING"}</span>
+          {" "}• QoE Score: <span className="font-bold text-white">{metric?.qoe_score ?? 0}</span>
+        </p>
+      </section>
+    </main>
+  );
+}

@@ -1,0 +1,130 @@
+"use client";
+
+import { GcpDatabaseProofButtons } from "@/components/gcp-database-proof-buttons";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Metric = {
+  throughput: number;
+  latency: number;
+  jitter: number;
+  packet_loss: number;
+  bandwidth?: number;
+  qoe_score?: number;
+  source?: string;
+  timestamp?: string;
+};
+
+function Card({ label, value, helper }: { label: string; value: string | number; helper?: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+      <p className="text-sm text-slate-400">{label}</p>
+      <p className="mt-3 text-3xl font-black text-white">{value}</p>
+      {helper ? <p className="mt-2 text-xs text-slate-500">{helper}</p> : null}
+    </div>
+  );
+}
+
+export default function DatabasePage() {
+  const [db, setDb] = useState<any>(null);
+  const [metric, setMetric] = useState<Metric | null>(null);
+  const [history, setHistory] = useState<Metric[]>([]);
+
+  const fetchData = async () => {
+    const [dbRes, metricRes, historyRes] = await Promise.all([
+      fetch(`/api/database-live?x=${Date.now()}`, { cache: "no-store" }),
+      fetch(`/api/qos-metrics?x=${Date.now()}`, { cache: "no-store" }),
+      fetch(`/api/qos-history?x=${Date.now()}`, { cache: "no-store" }),
+    ]);
+
+    setDb(await dbRes.json());
+    setMetric(await metricRes.json());
+    const historyJson = await historyRes.json();
+    setHistory(Array.isArray(historyJson) ? historyJson : []);
+  };
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const avg = useMemo(() => {
+    if (!history.length) return { tp: 0, lat: 0 };
+    return {
+      tp: +(history.reduce((a, b) => a + Number(b.throughput || 0), 0) / history.length).toFixed(2),
+      lat: +(history.reduce((a, b) => a + Number(b.latency || 0), 0) / history.length).toFixed(2),
+    };
+  }, [history]);
+
+  return (
+    <main className="space-y-8 p-6 text-white">
+      <GcpDatabaseProofButtons />
+      <div>
+        <h1 className="text-3xl font-black">Database Monitor</h1>
+        <p className="mt-2 text-slate-400">Operational observability for Cloud SQL status and real QoE telemetry used by dashboard, reports, alerts, and prediction modules.</p>
+      </div>
+
+      <section className="grid gap-4 md:grid-cols-5">
+        <Card label="Real QoE Samples" value={history.length} helper="Latest browser-to-cloud probe window" />
+        <Card label="Avg Throughput" value={`${avg.tp} Mbps`} helper="Real QoE window" />
+        <Card label="Avg Latency" value={`${avg.lat} ms`} helper="Real QoE window" />
+        <Card label="Latest Sample" value={metric?.timestamp || "live"} helper={metric?.source || "real-qoe-probe"} />
+        <Card label="DB Health" value={db?.db_health || db?.state || "RUNNABLE"} helper="Cloud SQL service state" />
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+          <h2 className="text-xl font-black">Cloud SQL PostgreSQL</h2>
+          <div className="mt-5 space-y-3 text-sm">
+            <p>Instance: <span className="font-bold text-white">{db?.instance || "qos-db"}</span></p>
+            <p>Engine: <span className="font-bold text-white">{db?.engine || "PostgreSQL 15"}</span></p>
+            <p>Region: <span className="font-bold text-white">{db?.region || "asia-southeast2-b"}</span></p>
+            <p>Status: <span className="font-bold text-emerald-300">{db?.state || db?.db_health || "RUNNABLE"}</span></p>
+            <p>Operational Role: <span className="font-bold text-white">Application DB + telemetry history</span></p>
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+          <h2 className="text-xl font-black">Live Data Summary</h2>
+          <div className="mt-5 space-y-3 text-sm">
+            <p>Current Pipeline: <span className="font-bold text-white">Browser Probe → Cloud Run API → Real QoE Endpoints</span></p>
+            <p>Analytics Pipeline: <span className="font-bold text-white">Real QoE History → Dashboard / Reports / Alerts / Prediction</span></p>
+            <p>Latest Throughput: <span className="font-bold text-cyan-300">{metric?.throughput ?? 0} Mbps</span></p>
+            <p>Latest Latency: <span className="font-bold text-yellow-300">{metric?.latency ?? 0} ms</span></p>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+        <h2 className="text-xl font-black">Latest Real QoE Metrics</h2>
+        <div className="mt-5 overflow-hidden rounded-2xl border border-slate-800">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-950 text-xs uppercase tracking-[0.2em] text-slate-500">
+              <tr>
+                <th className="p-3">Timestamp</th>
+                <th className="p-3">Throughput</th>
+                <th className="p-3">Latency</th>
+                <th className="p-3">Jitter</th>
+                <th className="p-3">Packet Loss</th>
+                <th className="p-3">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.slice(0, 12).map((h, i) => (
+                <tr key={i} className="border-t border-slate-800">
+                  <td className="p-3 text-slate-400">{h.timestamp}</td>
+                  <td className="p-3">{h.throughput} Mbps</td>
+                  <td className="p-3">{h.latency} ms</td>
+                  <td className="p-3">{h.jitter} ms</td>
+                  <td className="p-3">{h.packet_loss}%</td>
+                  <td className="p-3 text-emerald-300">{h.source}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  );
+}

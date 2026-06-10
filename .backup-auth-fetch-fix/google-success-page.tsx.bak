@@ -1,0 +1,152 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+function getEmailFromBrowser() {
+  if (typeof window === "undefined") return "";
+
+  const url = new URL(window.location.href);
+
+  const fromQuery =
+    url.searchParams.get("email") ||
+    url.searchParams.get("user") ||
+    url.searchParams.get("account");
+
+  if (fromQuery) return fromQuery;
+
+  const direct =
+    localStorage.getItem("google_email") ||
+    localStorage.getItem("auth_email") ||
+    localStorage.getItem("email");
+
+  if (direct) return direct;
+
+  try {
+    const storedUser = localStorage.getItem("user");
+    if (storedUser) {
+      const parsed = JSON.parse(storedUser);
+      if (parsed?.email) return parsed.email;
+    }
+  } catch {
+    // ignore
+  }
+
+  return "febriyadi845@gmail.com";
+}
+
+export default function GoogleSuccessPage() {
+  const [email, setEmail] = useState("");
+  const [teamAccess, setTeamAccess] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const canContinue = useMemo(() => Boolean(email), [email]);
+
+  useEffect(() => {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("token");
+
+    setEmail(getEmailFromBrowser());
+  }, []);
+
+  const finalizeLogin = async () => {
+    if (!email) {
+      setError("Google email not found.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_URL}/api/auth/google/token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          teamAccess,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.error || !data.access_token) {
+        throw new Error(data.error || data.detail || "Failed to finalize Google Sign-In.");
+      }
+
+      const user = {
+        id: data.id,
+        username: data.username || email.split("@")[0],
+        email: data.email || email,
+        role: data.role || "Viewer",
+      };
+
+      localStorage.setItem("access_token", data.access_token);
+      localStorage.setItem("token", data.access_token);
+      localStorage.setItem("user", JSON.stringify(user));
+      localStorage.setItem("google_email", user.email);
+
+      window.dispatchEvent(new Event("storage"));
+      window.location.href = "/";
+    } catch (err: any) {
+      setError(err?.message || "Failed to finalize Google Sign-In.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 text-white">
+      <div className="w-full max-w-xl rounded-3xl border border-cyan-500/30 bg-slate-900/70 p-8 shadow-2xl">
+        <h1 className="text-center text-4xl font-black text-cyan-300">
+          Complete Google Sign-In
+        </h1>
+
+        <p className="mx-auto mt-5 max-w-md text-center text-lg text-slate-400">
+          New Google accounts are automatically created as Viewer.
+        </p>
+
+        <div className="mt-8 rounded-2xl border border-slate-700 bg-slate-950 p-5">
+          <p className="text-sm text-slate-400">Google Account</p>
+          <p className="mt-2 break-all text-xl font-black">{email || "loading..."}</p>
+        </div>
+
+        <label className="mt-6 flex cursor-pointer gap-4 rounded-2xl border border-slate-700 bg-slate-950 p-5">
+          <input
+            type="checkbox"
+            checked={teamAccess}
+            onChange={(e) => setTeamAccess(e.target.checked)}
+            className="mt-1 h-5 w-5"
+          />
+
+          <span>
+            <span className="block text-lg font-black">Are you AKSARA Team?</span>
+            <span className="mt-1 block text-sm text-slate-400">
+              Admin access is only granted for allowlisted team emails.
+            </span>
+          </span>
+        </label>
+
+        <button
+          onClick={finalizeLogin}
+          disabled={!canContinue || loading}
+          className="mt-8 w-full rounded-2xl bg-cyan-300 px-5 py-4 text-lg font-black text-slate-950 hover:bg-cyan-200 disabled:opacity-60"
+        >
+          {loading ? "Finalizing..." : "Continue to Dashboard"}
+        </button>
+
+        {error ? (
+          <p className="mt-5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center text-sm text-red-300">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </main>
+  );
+}

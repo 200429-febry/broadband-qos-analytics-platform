@@ -1,0 +1,145 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+
+type QosHistoryItem = {
+  throughput?: number;
+  latency?: number;
+  jitter?: number;
+  packet_loss?: number;
+  bandwidth?: number;
+  qoe_score?: number;
+  source?: string;
+  timestamp?: string | number;
+  time?: string;
+};
+
+type ChartPoint = {
+  time: string;
+  throughput: number;
+  latency: number;
+  jitter: number;
+  qoe: number;
+};
+
+function normalizeTime(value: unknown, fallbackIndex: number) {
+  if (!value) return `T-${fallbackIndex}`;
+
+  if (typeof value === "number") {
+    return new Date(value * 1000).toLocaleTimeString();
+  }
+
+  const text = String(value);
+  if (text.includes(":")) return text;
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleTimeString();
+
+  return text;
+}
+
+export function RealtimeChart() {
+  const [data, setData] = useState<ChartPoint[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchHistory = async () => {
+    try {
+      const response = await fetch(`/api/qos-history?x=${Date.now()}`, {
+        cache: "no-store",
+      });
+
+      const json = await response.json();
+
+      if (!Array.isArray(json)) {
+        setData([]);
+        return;
+      }
+
+      const mapped = json
+        .slice()
+        .reverse()
+        .map((item: QosHistoryItem, index: number) => ({
+          time: normalizeTime(item.timestamp ?? item.time, index),
+          throughput: Number(item.throughput ?? item.bandwidth ?? 0),
+          latency: Number(item.latency ?? 0),
+          jitter: Number(item.jitter ?? 0),
+          qoe: Number(item.qoe_score ?? 0),
+        }))
+        .filter((item) => item.throughput > 0 || item.latency > 0 || item.jitter > 0 || item.qoe > 0);
+
+      setData(mapped);
+    } catch {
+      setData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchHistory();
+    const interval = setInterval(fetchHistory, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (loading) {
+    return <div className="flex h-[320px] items-center justify-center text-slate-500">Loading real QoE history...</div>;
+  }
+
+  if (!data.length) {
+    return (
+      <div className="flex h-[320px] flex-col items-center justify-center text-center">
+        <p className="text-slate-500">No real QoE history available yet</p>
+        <p className="mt-2 max-w-md text-xs text-slate-600">
+          Open Streaming QoE for a few seconds to generate browser-to-Cloud Run real traffic samples.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-[320px] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+          <XAxis dataKey="time" stroke="#64748b" fontSize={11} />
+          <YAxis stroke="#64748b" fontSize={11} />
+          <Tooltip
+            contentStyle={{
+              background: "#020617",
+              border: "1px solid #1e293b",
+              borderRadius: "12px",
+              color: "#e2e8f0",
+            }}
+          />
+          <Area
+            type="monotone"
+            dataKey="throughput"
+            name="Download Throughput Mbps"
+            stroke="#22d3ee"
+            fill="#22d3ee"
+            fillOpacity={0.2}
+            strokeWidth={2}
+          />
+          <Area
+            type="monotone"
+            dataKey="latency"
+            name="Latency ms"
+            stroke="#10b981"
+            fill="#10b981"
+            fillOpacity={0.16}
+            strokeWidth={2}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}

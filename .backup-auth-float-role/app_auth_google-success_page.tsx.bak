@@ -1,0 +1,151 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+
+const API_URL = "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+export default function GoogleSuccessPage() {
+  const router = useRouter();
+
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [image, setImage] = useState("");
+  const [isTeam, setIsTeam] = useState(false);
+  const [teamPhone, setTeamPhone] = useState("");
+  const [status, setStatus] = useState("Checking Google session...");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const loadSession = async () => {
+      const sessionRes = await fetch("/api/auth/session", { cache: "no-store" });
+      const session = await sessionRes.json();
+
+      if (!session?.user?.email) {
+        setStatus("Google session not found. Returning to login...");
+        setTimeout(() => router.push("/login"), 1200);
+        return;
+      }
+
+      setEmail(session.user.email);
+      setName(session.user.name || "");
+      setImage(session.user.image || "");
+      setStatus("Google account verified. Complete account setup.");
+    };
+
+    loadSession();
+  }, [router]);
+
+  const finalize = async () => {
+    if (!email) return;
+
+    setLoading(true);
+    setStatus("Creating account and issuing backend token...");
+
+    try {
+      const tokenRes = await fetch(`${API_URL}/api/auth/google/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          name,
+          image,
+          aksara_team: isTeam,
+          team_phone: teamPhone,
+        }),
+      });
+
+      const tokenData = await tokenRes.json();
+
+      if (!tokenData.access_token) {
+        setStatus(tokenData.error || "Backend token failed.");
+        setLoading(false);
+        return;
+      }
+
+      localStorage.setItem("access_token", tokenData.access_token);
+      localStorage.setItem("user", JSON.stringify({
+        id: tokenData.id,
+        username: tokenData.username,
+        email: tokenData.email,
+        role: tokenData.role,
+        photo_url: image,
+        auth_provider: "google",
+      }));
+
+      setStatus(`Success. Logged in as ${tokenData.role}. Redirecting...`);
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 700);
+    } catch (error) {
+      console.error(error);
+      setStatus("Failed to finalize Google Sign-In.");
+      setLoading(false);
+    }
+  };
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 text-white">
+      <div className="w-full max-w-md rounded-2xl border border-cyan-500/30 bg-slate-900/90 p-8 shadow-2xl">
+        <h1 className="text-center text-2xl font-bold text-cyan-300">
+          Complete Google Sign-In
+        </h1>
+
+        <p className="mt-2 text-center text-sm text-slate-400">
+          New Google accounts are automatically created as Viewer.
+        </p>
+
+        <div className="mt-6 rounded-xl border border-slate-700 bg-slate-950 p-4 text-sm">
+          <p className="text-slate-400">Google Account</p>
+          <p className="mt-1 font-semibold text-white">{email || "-"}</p>
+        </div>
+
+        <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-700 bg-slate-950 p-4 text-sm">
+          <input
+            type="checkbox"
+            checked={isTeam}
+            onChange={(e) => setIsTeam(e.target.checked)}
+            className="mt-1 h-4 w-4"
+          />
+          <span>
+            <span className="block font-semibold text-white">
+              Are you AKSARA Team?
+            </span>
+            <span className="block text-xs text-slate-400">
+              Valid team phone numbers will receive Admin access.
+            </span>
+          </span>
+        </label>
+
+        {isTeam && (
+          <div className="mt-4">
+            <label className="mb-2 block text-sm text-slate-400">
+              Team Phone Number
+            </label>
+            <input
+              value={teamPhone}
+              onChange={(e) => setTeamPhone(e.target.value)}
+              placeholder="Example: 0895..."
+              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-cyan-400"
+            />
+            <p className="mt-2 text-xs text-slate-500">
+              Registered Admin verification: Febry / Sandy.
+            </p>
+          </div>
+        )}
+
+        <button
+          onClick={finalize}
+          disabled={loading || !email}
+          className="mt-6 w-full rounded-xl bg-cyan-400 px-4 py-3 text-sm font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-50"
+        >
+          {loading ? "Processing..." : "Continue to Dashboard"}
+        </button>
+
+        <p className="mt-4 text-center text-xs text-slate-400">
+          {status}
+        </p>
+      </div>
+    </main>
+  );
+}

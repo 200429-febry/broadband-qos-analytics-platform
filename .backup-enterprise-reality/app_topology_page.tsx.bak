@@ -1,0 +1,518 @@
+"use client";
+
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Monitor,
+  Server,
+  BrainCircuit,
+  Database,
+  Activity,
+  BarChart3,
+  Map,
+  ShieldAlert,
+  Cloud,
+  Radio,
+  Wifi,
+  GitBranch,
+  RefreshCw,
+  Network,
+  ArrowDown,
+  ArrowRight,
+} from "lucide-react";
+
+interface HealthData {
+  status?: string;
+  api_service?: string;
+  database?: string;
+  ml_service?: string;
+}
+
+type NodeStatus = "online" | "warning" | "offline";
+
+function getStatusStyle(status: NodeStatus) {
+  if (status === "online") {
+    return {
+      border: "border-emerald-500/40",
+      bg: "bg-emerald-500/10",
+      text: "text-emerald-400",
+      dot: "bg-emerald-400",
+      glow: "shadow-emerald-500/20",
+    };
+  }
+
+  if (status === "warning") {
+    return {
+      border: "border-amber-500/40",
+      bg: "bg-amber-500/10",
+      text: "text-amber-400",
+      dot: "bg-amber-400",
+      glow: "shadow-amber-500/20",
+    };
+  }
+
+  return {
+    border: "border-red-500/40",
+    bg: "bg-red-500/10",
+    text: "text-red-400",
+    dot: "bg-red-400",
+    glow: "shadow-red-500/20",
+  };
+}
+
+export default function TopologyPage() {
+  const [health, setHealth] = useState<HealthData | null>(null);
+  const [lastChecked, setLastChecked] = useState("");
+  const [apiLatency, setApiLatency] = useState<number | null>(null);
+  const [coverageCount, setCoverageCount] = useState<number>(0);
+  const [alertCount, setAlertCount] = useState<number>(0);
+  const [qosSamples, setQosSamples] = useState<number>(0);
+  const [mlScore, setMlScore] = useState<number | null>(null);
+
+  const apiUrl =
+    "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+  const checkHealth = async () => {
+    const start = performance.now();
+
+    try {
+      const [healthRes, coverageRes, alertsRes, qosRes, mlRes] =
+        await Promise.allSettled([
+          fetch(`${apiUrl}/api/health`),
+          fetch(`${apiUrl}/api/coverage?limit=1000&min_lat=-6.7&max_lat=-5.9&min_lon=106.4&max_lon=107.2`),
+          fetch(`${apiUrl}/api/alerts`),
+          fetch(`${apiUrl}/api/qos/history`),
+          fetch(`${apiUrl}/api/ml/predict`, { method: "POST" }),
+        ]);
+
+      if (healthRes.status === "fulfilled") {
+        const data = await healthRes.value.json();
+        setHealth(data);
+      }
+
+      if (coverageRes.status === "fulfilled") {
+        const data = await coverageRes.value.json();
+        setCoverageCount(Number(data.count || data.towers?.length || 0));
+      }
+
+      if (alertsRes.status === "fulfilled") {
+        const data = await alertsRes.value.json();
+        setAlertCount(Array.isArray(data) ? data.length : 0);
+      }
+
+      if (qosRes.status === "fulfilled") {
+        const data = await qosRes.value.json();
+        setQosSamples(Array.isArray(data) ? data.length : 0);
+      }
+
+      if (mlRes.status === "fulfilled") {
+        const data = await mlRes.value.json();
+        setMlScore(typeof data.qos_score === "number" ? data.qos_score : null);
+      }
+
+      const elapsed = performance.now() - start;
+      setApiLatency(elapsed);
+      setLastChecked(new Date().toLocaleTimeString());
+    } catch {
+      setHealth({
+        status: "unhealthy",
+        api_service: "offline",
+        database: "offline",
+        ml_service: "offline",
+      });
+      setApiLatency(null);
+      setLastChecked(new Date().toLocaleTimeString());
+    }
+  };
+
+  useEffect(() => {
+    checkHealth();
+    const interval = setInterval(checkHealth, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const serviceStatus = useMemo(() => {
+    const api: NodeStatus =
+      health?.api_service === "operational" ? "online" : "offline";
+
+    const db: NodeStatus =
+      health?.database === "operational" ? "online" : "offline";
+
+    const ml: NodeStatus =
+      health?.ml_service === "operational" ? "online" : "offline";
+
+    const coverage: NodeStatus =
+      coverageCount > 0 ? "online" : api === "online" ? "warning" : "offline";
+
+    const alerts: NodeStatus =
+      alertCount > 0 ? "warning" : api === "online" ? "online" : "offline";
+
+    const qos: NodeStatus =
+      qosSamples > 0 ? "online" : api === "online" ? "warning" : "offline";
+
+    const gcp: NodeStatus =
+      api === "online" && db === "online" && ml === "online" ? "online" : "warning";
+
+    return {
+      client: "online" as NodeStatus,
+      access: "online" as NodeStatus,
+      api,
+      db,
+      ml,
+      qos,
+      coverage,
+      alerts,
+      gcp,
+      pubsub: "online" as NodeStatus,
+      bigquery: "online" as NodeStatus,
+      storage: "online" as NodeStatus,
+      secrets: "online" as NodeStatus,
+    };
+  }, [health, coverageCount, alertCount, qosSamples]);
+
+  const nodes = [
+    serviceStatus.client,
+    serviceStatus.access,
+    serviceStatus.api,
+    serviceStatus.db,
+    serviceStatus.ml,
+    serviceStatus.qos,
+    serviceStatus.coverage,
+    serviceStatus.alerts,
+    serviceStatus.gcp,
+    serviceStatus.pubsub,
+    serviceStatus.bigquery,
+    serviceStatus.storage,
+    serviceStatus.secrets,
+  ];
+
+  const onlineCount = nodes.filter((s) => s === "online").length;
+  const warningCount = nodes.filter((s) => s === "warning").length;
+  const offlineCount = nodes.filter((s) => s === "offline").length;
+
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-white">
+            Network Service Topology
+          </h1>
+
+          <p className="text-slate-400">
+            NOC-style dependency graph for frontend, API, database, ML,
+            observability, coverage intelligence, and GCP migration path.
+          </p>
+        </div>
+
+        <button
+          onClick={checkHealth}
+          className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300 hover:bg-emerald-500/20"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Refresh Health
+        </button>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-4">
+        <SummaryCard label="Online Nodes" value={onlineCount} color="text-emerald-400" />
+        <SummaryCard label="Warning Nodes" value={warningCount} color="text-amber-400" />
+        <SummaryCard label="Offline Nodes" value={offlineCount} color="text-red-400" />
+        <SummaryCard
+          label="API Round Trip"
+          value={apiLatency ? `${apiLatency.toFixed(1)} ms` : "-"}
+          color="text-cyan-400"
+        />
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-white">
+              Live Service Dependency Graph
+            </h2>
+
+            <p className="text-sm text-slate-400">
+              Last checked: {lastChecked || "-"} • Auto-refresh every 5 seconds
+            </p>
+          </div>
+
+          <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-300">
+            Cloud Run Production Topology
+          </span>
+        </div>
+
+        <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950/70 p-6">
+          <div className="min-w-[1050px]">
+            <div className="grid grid-cols-5 gap-6">
+              <TopologyNode
+                title="Client Web"
+                subtitle="Next.js UI"
+                status={serviceStatus.client}
+                icon={<Monitor className="h-6 w-6" />}
+                details="Dashboard, monitoring, coverage map, reports"
+                metric="Cloud Run HTTPS"
+              />
+
+              <FlowArrow />
+
+              <TopologyNode
+                title="Access Layer"
+                subtitle="Browser / User Network"
+                status={serviceStatus.access}
+                icon={<Wifi className="h-6 w-6" />}
+                details="Client RTT, downlink, geolocation, session"
+                metric="Browser session"
+              />
+
+              <FlowArrow />
+
+              <TopologyNode
+                title="QoS API Gateway"
+                subtitle="FastAPI Backend"
+                status={serviceStatus.api}
+                icon={<Server className="h-6 w-6" />}
+                details="Auth, metrics, alerts, coverage API, ML bridge"
+                metric={apiLatency ? `${apiLatency.toFixed(1)} ms RTT` : "Cloud Run API"}
+              />
+            </div>
+
+            <div className="my-6 flex justify-center">
+              <ArrowDown className="h-8 w-8 animate-pulse text-emerald-400" />
+            </div>
+
+            <div className="grid grid-cols-5 gap-6">
+              <TopologyNode
+                title="PostgreSQL"
+                subtitle="Operational DB"
+                status={serviceStatus.db}
+                icon={<Database className="h-6 w-6" />}
+                details="User data, QoS telemetry, history samples"
+                metric="Cloud SQL socket"
+              />
+
+              <TopologyNode
+                title="ML Inference"
+                subtitle="Prediction Service"
+                status={serviceStatus.ml}
+                icon={<BrainCircuit className="h-6 w-6" />}
+                details="QoS prediction, anomaly score, confidence"
+                metric={mlScore ? `QoS score ${mlScore.toFixed(1)}` : "ML endpoint"}
+              />
+
+              <TopologyNode
+                title="Coverage Intelligence"
+                subtitle="OpenCellID BTS Layer"
+                status={serviceStatus.coverage}
+                icon={<Map className="h-6 w-6" />}
+                details="Provider map, GPS, nearest BTS, RF estimation"
+                metric={`${coverageCount} BTS`}
+              />
+
+              <TopologyNode
+                title="QoS Telemetry"
+                subtitle="Cloud SQL History"
+                status={serviceStatus.qos}
+                icon={<Activity className="h-6 w-6" />}
+                details="Live QoS history consumed by monitoring, reports, analytics, and ML prediction"
+                metric={`${qosSamples} samples`}
+              />
+
+              <TopologyNode
+                title="BigQuery Analytics"
+                subtitle="Parsed Telemetry View"
+                status={serviceStatus.bigquery}
+                icon={<BarChart3 className="h-6 w-6" />}
+                details="Realtime Pub/Sub telemetry parsed into analytical node-level QoS metrics"
+                metric="telemetry_stream_parsed"
+              />
+            </div>
+
+            <div className="my-6 flex justify-center">
+              <GitBranch className="h-8 w-8 animate-pulse text-cyan-400" />
+            </div>
+
+            <div className="grid grid-cols-3 gap-6">
+              <TopologyNode
+                title="Alerting Engine"
+                subtitle="Threshold + AI Alert"
+                status={serviceStatus.alerts}
+                icon={<ShieldAlert className="h-6 w-6" />}
+                details="Latency risk, packet loss, anomaly, SLA breach"
+                metric={`${alertCount} active alerts`}
+              />
+
+              <TopologyNode
+                title="Radio Network Layer"
+                subtitle="LTE / GSM / UMTS Coverage"
+                status={serviceStatus.coverage}
+                icon={<Radio className="h-6 w-6" />}
+                details="Provider distribution, estimated band, cell range"
+                metric="OpenCellID"
+              />
+
+              <TopologyNode
+                title="GCP Runtime"
+                subtitle="Cloud Run / SQL / PubSub / BQ"
+                status={serviceStatus.gcp}
+                icon={<Cloud className="h-6 w-6" />}
+                details="Production runtime with Cloud Run services, Cloud SQL, Pub/Sub, BigQuery, Storage, and Secret Manager"
+                metric="Production"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="mb-4 text-xl font-semibold text-white">
+            Current Health Response
+          </h2>
+
+          <pre className="overflow-x-auto rounded-xl bg-slate-950 p-4 text-xs text-emerald-300">
+            {JSON.stringify(health, null, 2)}
+          </pre>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="mb-4 text-xl font-semibold text-white">
+            Service Flow Interpretation
+          </h2>
+
+          <div className="space-y-3 text-sm text-slate-300">
+            <FlowText text={`Frontend reaches the FastAPI backend through Cloud Run HTTPS with measured round trip ${apiLatency ? apiLatency.toFixed(1) : "-"} ms.`} />
+            <FlowText text={`API health reports database=${health?.database || "-"} and ml_service=${health?.ml_service || "-"}.`} />
+            <FlowText text={`QoS telemetry currently returns ${qosSamples} operational samples and feeds monitoring, analytics, reports, alerts, and ML prediction.`} />
+            <FlowText text={`Coverage API currently exposes ${coverageCount} BTS records for RF/network context.`} />
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="mb-4 text-xl font-semibold text-white">
+            GCP Migration Mapping
+          </h2>
+
+          <div className="space-y-3 text-sm">
+            <RoadmapItem label="Frontend" status="Cloud Run: qos-frontend" />
+            <RoadmapItem label="FastAPI" status="Cloud Run: qos-api" />
+            <RoadmapItem label="ML Inference" status="Cloud Run: qos-ml-service" />
+            <RoadmapItem label="PostgreSQL" status="Cloud SQL: qos-db" />
+            <RoadmapItem label="Container Images" status="Artifact Registry: qos-platform" />
+            <RoadmapItem label="Realtime Ingestion" status="Pub/Sub: qos-telemetry-topic" />
+            <RoadmapItem label="Raw Archive" status="Cloud Storage: qos-telemetry-242258296786" />
+            <RoadmapItem label="Analytics Warehouse" status="BigQuery: qos_analytics" />
+            <RoadmapItem label="Secrets" status="Secret Manager: JWT + DB URL" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TopologyNode({
+  title,
+  subtitle,
+  status,
+  icon,
+  details,
+  metric,
+}: {
+  title: string;
+  subtitle: string;
+  status: NodeStatus;
+  icon: React.ReactNode;
+  details: string;
+  metric: string;
+}) {
+  const style = getStatusStyle(status);
+
+  return (
+    <div
+      className={`rounded-2xl border ${style.border} ${style.bg} p-5 shadow-lg ${style.glow}`}
+    >
+      <div className="mb-4 flex items-center justify-between">
+        <div className={style.text}>
+          {icon}
+        </div>
+
+        <span className="flex items-center gap-2 rounded-full bg-slate-950/50 px-3 py-1 text-xs uppercase text-slate-200">
+          <span className={`h-2 w-2 rounded-full ${style.dot}`} />
+          {status}
+        </span>
+      </div>
+
+      <h3 className="text-lg font-bold text-white">
+        {title}
+      </h3>
+
+      <p className="text-sm text-slate-400">
+        {subtitle}
+      </p>
+
+      <p className="mt-4 min-h-[56px] text-sm text-slate-300">
+        {details}
+      </p>
+
+      <div className="mt-4 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300">
+        {metric}
+      </div>
+    </div>
+  );
+}
+
+function FlowArrow() {
+  return (
+    <div className="flex items-center justify-center">
+      <ArrowRight className="h-8 w-8 animate-pulse text-emerald-400" />
+    </div>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number | string;
+  color: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+      <p className="text-sm text-slate-400">
+        {label}
+      </p>
+
+      <p className={`mt-1 text-2xl font-bold ${color}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function RoadmapItem({
+  label,
+  status,
+}: {
+  label: string;
+  status: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+      <p className="font-medium text-white">
+        {label}
+      </p>
+
+      <p className="text-right text-slate-400">
+        {status}
+      </p>
+    </div>
+  );
+}
+
+function FlowText({ text }: { text: string }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+      {text}
+    </div>
+  );
+}

@@ -1,0 +1,813 @@
+from fastapi import FastAPI, WebSocket, Header
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from coverage_loader import load_coverage_data
+from database import SessionLocal
+from pydantic import BaseModel
+from passlib.context import CryptContext
+from jose import jwt, JWTError
+from datetime import datetime, timedelta
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
+import time
+import json
+import asyncio
+import requests
+import os
+
+app = FastAPI(title="QoS Analytics Platform API")
+
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8001")
+JWT_SECRET = os.getenv("JWT_SECRET", "supersecretjwtkey")
+JWT_ALGORITHM = "HS256"
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+REQUEST_COUNT = Counter(
+    "qos_api_requests_total",
+    "Total API requests",
+    ["method", "endpoint", "status_code"]
+)
+
+REQUEST_LATENCY = Histogram(
+    "qos_api_request_latency_seconds",
+    "API request latency",
+    ["method", "endpoint"]
+)
+
+QOS_THROUGHPUT = Gauge(
+    "qos_current_throughput_mbps",
+    "Current QoS throughput in Mbps"
+)
+
+QOS_LATENCY = Gauge(
+    "qos_current_latency_ms",
+    "Current QoS latency in ms"
+)
+
+QOS_PACKET_LOSS = Gauge(
+    "qos_current_packet_loss_percent",
+    "Current QoS packet loss percentage"
+)
+
+QOS_JITTER = Gauge(
+    "qos_current_jitter_ms",
+    "Current QoS jitter in ms"
+)
+
+ML_PREDICTED_THROUGHPUT = Gauge(
+    "qos_ml_predicted_throughput_mbps",
+    "ML predicted QoS throughput in Mbps"
+)
+
+ML_PREDICTED_LATENCY = Gauge(
+    "qos_ml_predicted_latency_ms",
+    "ML predicted QoS latency in ms"
+)
+
+ML_PREDICTED_PACKET_LOSS = Gauge(
+    "qos_ml_predicted_packet_loss_percent",
+    "ML predicted QoS packet loss percentage"
+)
+
+ML_QOS_SCORE = Gauge(
+    "qos_ml_qos_score",
+    "ML calculated QoS health score"
+)
+
+ML_ANOMALY_SCORE = Gauge(
+    "qos_ml_anomaly_score",
+    "ML anomaly score"
+)
+
+ML_CONFIDENCE = Gauge(
+    "qos_ml_confidence",
+    "ML prediction confidence"
+)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+
+class UpdateUserRequest(BaseModel):
+    username: str
+    role: str
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def verify_token_and_role(authorization: str, allowed_roles: list):
+    if authorization is None:
+        return {"allowed": False, "error": "Missing authorization header"}
+
+    try:
+        token = authorization.replace("Bearer ", "")
+
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=[JWT_ALGORITHM]
+        )
+
+        role = payload.get("role")
+        username = payload.get("sub")
+
+        if role not in allowed_roles:
+            return {
+                "allowed": False,
+                "error": "Access denied",
+                "username": username,
+                "role": role
+            }
+
+        return {
+            "allowed": True,
+            "username": username,
+            "role": role
+        }
+
+    except JWTError:
+        return {
+            "allowed": False,
+            "error": "Invalid or expired token"
+        }
+
+
+@app.get("/api/health")
+def health_check():
+    db = SessionLocal()
+
+    try:
+        db.execute(text("SELECT 1"))
+
+        ml_status = "operational"
+
+        try:
+            requests.get(f"{ML_SERVICE_URL}/health", timeout=3)
+        except:
+            ml_status = "offline"
+
+        return {
+            "status": "healthy",
+            "api_service": "operational",
+            "database": "operational",
+            "ml_service": ml_status,
+            "uptime": "99.9%"
+        }
+
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+
+    finally:
+        db.close()
+        
+
+@app.get("/api/coverage")
+def get_coverage(
+    limit: int = 5000,
+    min_lat: float = -6.7,
+    max_lat: float = -5.9,
+    min_lon: float = 106.4,
+    max_lon: float = 107.2,
+):
+    towers = load_coverage_data(
+        limit=limit,
+        min_lat=min_lat,
+        max_lat=max_lat,
+        min_lon=min_lon,
+        max_lon=max_lon,
+    )
+
+    return {
+        "count": len(towers),
+        "bounds": {
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon,
+        },
+        "towers": towers,
+    }
+
+@app.middleware("http")
+async def prometheus_middleware(request, call_next):
+    start_time = time.time()
+
+    response = await call_next(request)
+
+    latency = time.time() - start_time
+
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        status_code=response.status_code
+    ).inc()
+
+    REQUEST_LATENCY.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(latency)
+
+    return response
+
+@app.get("/metrics")
+def metrics():
+    return Response(
+        generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
+    )
+
+@app.post("/api/auth/login")
+def login(data: LoginRequest):
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    id,
+                    username,
+                    role,
+                    hashed_password
+                FROM users
+                WHERE username = :username
+                LIMIT 1
+            """),
+            {"username": data.username}
+        ).fetchone()
+
+        if result is None:
+            return {"error": "Invalid username or password"}
+
+        if not pwd_context.verify(data.password, result[3]):
+            return {"error": "Invalid username or password"}
+
+        token_payload = {
+            "sub": result[1],
+            "role": result[2],
+            "exp": datetime.utcnow() + timedelta(hours=8)
+        }
+
+        access_token = jwt.encode(
+            token_payload,
+            JWT_SECRET,
+            algorithm=JWT_ALGORITHM
+        )
+
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": result[0],
+                "username": result[1],
+                "role": result[2]
+            }
+        }
+
+    finally:
+        db.close()
+
+
+@app.get("/api/auth/me")
+def get_current_user(authorization: str = Header(None)):
+    if authorization is None:
+        return {
+            "authenticated": False,
+            "error": "Missing authorization header"
+        }
+
+    try:
+        token = authorization.replace("Bearer ", "")
+
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=[JWT_ALGORITHM]
+        )
+
+        return {
+            "authenticated": True,
+            "username": payload.get("sub"),
+            "role": payload.get("role")
+        }
+
+    except JWTError:
+        return {
+            "authenticated": False,
+            "error": "Invalid or expired token"
+        }
+
+
+@app.get("/api/users")
+def get_users(authorization: str = Header(None)):
+    auth = verify_token_and_role(
+        authorization,
+        ["Admin"]
+    )
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    id,
+                    username,
+                    role,
+                    created_at
+                FROM users
+                ORDER BY id ASC
+            """)
+        ).fetchall()
+
+        users = []
+
+        for row in result:
+            users.append({
+                "id": row[0],
+                "username": row[1],
+                "role": row[2],
+                "created_at": str(row[3])
+            })
+
+        return users
+
+    except Exception as e:
+        return {
+            "error": str(e)
+        }
+
+    finally:
+        db.close()
+
+@app.post("/api/users")
+def create_user(data: CreateUserRequest, authorization: str = Header(None)):
+
+    auth = verify_token_and_role(
+        authorization,
+        ["Admin"]
+    )
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    hashed_password = pwd_context.hash(data.password)
+
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                INSERT INTO users (
+                    username,
+                    hashed_password,
+                    role
+                )
+                VALUES (
+                    :username,
+                    :hashed_password,
+                    :role
+                )
+                RETURNING id, username, role, created_at
+            """),
+            {
+                "username": data.username,
+                "hashed_password": hashed_password,
+                "role": data.role
+            }
+        ).fetchone()
+
+        db.commit()
+
+        return {
+            "id": result[0],
+            "username": result[1],
+            "role": result[2],
+            "created_at": str(result[3])
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {
+            "error": str(e)
+        }
+
+    finally:
+        db.close()
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    id,
+                    username,
+                    role,
+                    created_at
+                FROM users
+                ORDER BY id ASC
+            """)
+        ).fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "username": row[1],
+                "role": row[2],
+                "created_at": str(row[3])
+            }
+            for row in result
+        ]
+
+    finally:
+        db.close()
+
+
+@app.put("/api/users/{user_id}")
+def update_user(user_id: int, data: UpdateUserRequest, authorization: str = Header(None)):
+
+    auth = verify_token_and_role(authorization, ["Admin"])
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                UPDATE users
+                SET username = :username,
+                    role = :role
+                WHERE id = :user_id
+                RETURNING id, username, role, created_at
+            """),
+            {
+                "user_id": user_id,
+                "username": data.username,
+                "role": data.role
+            }
+        ).fetchone()
+
+        db.commit()
+
+        if result is None:
+            return {"error": "User not found"}
+
+        return {
+            "id": result[0],
+            "username": result[1],
+            "role": result[2],
+            "created_at": str(result[3])
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user(user_id: int, authorization: str = Header(None)):
+
+    auth = verify_token_and_role(authorization, ["Admin"])
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    if user_id == 1:
+        return {
+            "error": "Primary admin account cannot be deleted"
+        }
+
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                DELETE FROM users
+                WHERE id = :user_id
+                RETURNING id
+            """),
+            {"user_id": user_id}
+        ).fetchone()
+
+        db.commit()
+
+        if result is None:
+            return {"error": "User not found"}
+
+        return {
+            "message": "User deleted successfully",
+            "id": result[0]
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+@app.get("/api/qos/metrics")
+def get_qos_metrics():
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    throughput,
+                    latency,
+                    jitter,
+                    packet_loss,
+                    bandwidth_utilization
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 1
+            """)
+        ).fetchone()
+
+        if result:
+          QOS_THROUGHPUT.set(result[0])
+          QOS_LATENCY.set(result[1])
+          QOS_JITTER.set(result[2])
+          QOS_PACKET_LOSS.set(result[3])
+
+        if result is None:
+            return {"message": "No QoS data found"}
+
+        return {
+            "throughput": result[0],
+            "latency": result[1],
+            "jitter": result[2],
+            "packet_loss": result[3],
+            "bandwidth": result[4]
+        }
+
+    finally:
+        db.close()
+
+
+@app.get("/api/qos/history")
+def get_qos_history():
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    throughput,
+                    latency,
+                    jitter,
+                    packet_loss,
+                    timestamp
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 20
+            """)
+        ).fetchall()
+
+        return [
+            {
+                "throughput": row[0],
+                "latency": row[1],
+                "jitter": row[2],
+                "packet_loss": row[3],
+                "timestamp": str(row[4])
+            }
+            for row in result
+        ]
+
+    finally:
+        db.close()
+
+
+@app.get("/api/alerts")
+def get_alerts():
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    id,
+                    latency,
+                    packet_loss,
+                    jitter,
+                    timestamp
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 30
+            """)
+        ).fetchall()
+
+        alerts = []
+
+        for row in result:
+            metric_id = row[0]
+            latency = row[1]
+            packet_loss = row[2]
+            jitter = row[3]
+            timestamp = row[4]
+
+            if packet_loss >= 3:
+                alerts.append({
+                    "id": metric_id,
+                    "type": "critical",
+                    "message": "Critical Packet Loss Detected",
+                    "metric": f"{packet_loss}%",
+                    "time": str(timestamp)
+                })
+
+            elif packet_loss >= 2:
+                alerts.append({
+                    "id": metric_id,
+                    "type": "warning",
+                    "message": "High Packet Loss Detected",
+                    "metric": f"{packet_loss}%",
+                    "time": str(timestamp)
+                })
+
+            if latency >= 100:
+                alerts.append({
+                    "id": metric_id + 100000,
+                    "type": "critical",
+                    "message": "Critical Latency Spike Detected",
+                    "metric": f"{latency} ms",
+                    "time": str(timestamp)
+                })
+
+            elif latency >= 80:
+                alerts.append({
+                    "id": metric_id + 200000,
+                    "type": "warning",
+                    "message": "High Latency Detected",
+                    "metric": f"{latency} ms",
+                    "time": str(timestamp)
+                })
+
+            if jitter >= 30:
+                alerts.append({
+                    "id": metric_id + 300000,
+                    "type": "warning",
+                    "message": "High Jitter Detected",
+                    "metric": f"{jitter} ms",
+                    "time": str(timestamp)
+                })
+
+        return alerts[:20]
+
+    finally:
+        db.close()
+
+
+@app.post("/api/ml/predict")
+def ml_predict():
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    throughput,
+                    latency,
+                    jitter,
+                    packet_loss,
+                    bandwidth_utilization
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 1
+            """)
+        ).fetchone()
+
+        if result is None:
+            return {"message": "No QoS data found"}
+
+        payload = {
+            "throughput": result[0],
+            "latency": result[1],
+            "jitter": result[2],
+            "packet_loss": result[3],
+            "bandwidth": result[4]
+        }
+
+        response = requests.post(
+            f"{ML_SERVICE_URL}/predict",
+            json=payload,
+            timeout=10
+        )
+
+        response.raise_for_status()
+
+        prediction = response.json()
+
+        ML_PREDICTED_THROUGHPUT.set(
+            prediction.get("predicted_throughput", 0)
+        )
+
+        ML_PREDICTED_LATENCY.set(
+            prediction.get("predicted_latency", 0)
+        )
+
+        ML_PREDICTED_PACKET_LOSS.set(
+            prediction.get("predicted_packet_loss", 0)
+        )
+
+        ML_QOS_SCORE.set(
+            prediction.get("qos_score", 0)
+        )
+
+        ML_ANOMALY_SCORE.set(
+            prediction.get("anomaly_score", 0)
+        )
+
+        ML_CONFIDENCE.set(
+            prediction.get("confidence", 0)
+        )
+
+        return prediction
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+@app.websocket("/api/ws/realtime")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+
+    try:
+        while True:
+            db = SessionLocal()
+
+            try:
+                result = db.execute(
+                    text("""
+                        SELECT
+                            throughput,
+                            latency,
+                            jitter,
+                            packet_loss
+                        FROM qosmetrics
+                        ORDER BY id DESC
+                        LIMIT 1
+                    """)
+                ).fetchone()
+
+                if result:
+                    data = {
+                        "throughput": result[0],
+                        "latency": result[1],
+                        "jitter": result[2],
+                        "packet_loss": result[3]
+                    }
+
+                    await websocket.send_text(json.dumps(data))
+
+            finally:
+                db.close()
+
+            await asyncio.sleep(5)
+
+    except Exception as e:
+        print("WebSocket closed:", e)

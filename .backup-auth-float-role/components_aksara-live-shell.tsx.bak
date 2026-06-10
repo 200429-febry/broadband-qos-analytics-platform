@@ -1,0 +1,213 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { Activity, Bell, Globe2, Gauge, Radio, Zap } from "lucide-react";
+
+type Metric = {
+  throughput?: number;
+  latency?: number;
+  jitter?: number;
+  packet_loss?: number;
+  qoe_score?: number;
+  streaming_status?: string;
+  source?: string;
+  timestamp?: string;
+};
+
+type AlertItem = {
+  id?: string | number;
+  type?: string;
+  message?: string;
+  metric?: string;
+  time?: string;
+  source?: string;
+};
+
+type Lang = "id" | "en";
+
+const text = {
+  id: {
+    live: "Telemetri Live",
+    source: "Sumber",
+    qoe: "QoE",
+    throughput: "Throughput",
+    latency: "Latensi",
+    jitter: "Jitter",
+    alerts: "Alert",
+    stable: "Stabil",
+    language: "Bahasa",
+    hide: "Sembunyikan",
+    show: "Tampilkan",
+    realProbe: "Probe real browser-ke-cloud",
+  },
+  en: {
+    live: "Live Telemetry",
+    source: "Source",
+    qoe: "QoE",
+    throughput: "Throughput",
+    latency: "Latency",
+    jitter: "Jitter",
+    alerts: "Alerts",
+    stable: "Stable",
+    language: "Language",
+    hide: "Hide",
+    show: "Show",
+    realProbe: "Real browser-to-cloud probe",
+  },
+};
+
+export function AksaraLiveShell() {
+  const [metric, setMetric] = useState<Metric | null>(null);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [lang, setLang] = useState<Lang>("id");
+  const [collapsed, setCollapsed] = useState(false);
+
+  const t = text[lang];
+
+  const fetchLive = async () => {
+    try {
+      const [metricRes, alertRes] = await Promise.all([
+        fetch(`/api/qos-metrics?x=${Date.now()}`, { cache: "no-store" }),
+        fetch(`/api/qos-alerts?x=${Date.now()}`, { cache: "no-store" }),
+      ]);
+
+      const metricJson = await metricRes.json();
+      const alertJson = await alertRes.json();
+
+      setMetric(metricJson);
+      setAlerts(Array.isArray(alertJson) ? alertJson : []);
+    } catch {
+      // keep previous data
+    }
+  };
+
+  useEffect(() => {
+    const saved = localStorage.getItem("aksara-lang");
+    if (saved === "id" || saved === "en") {
+      setLang(saved);
+      document.documentElement.lang = saved;
+    }
+
+    fetchLive();
+    const interval = setInterval(fetchLive, 3000);
+
+    const onRealtime = () => fetchLive();
+    window.addEventListener("real-qoe-updated", onRealtime);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("real-qoe-updated", onRealtime);
+    };
+  }, []);
+
+  const toggleLang = () => {
+    const next = lang === "id" ? "en" : "id";
+    setLang(next);
+    localStorage.setItem("aksara-lang", next);
+    document.documentElement.lang = next;
+    window.dispatchEvent(new CustomEvent("aksara-lang-change", { detail: next }));
+  };
+
+  const statusColor = useMemo(() => {
+    const qoe = Number(metric?.qoe_score ?? 0);
+    if (qoe >= 90) return "text-emerald-300 border-emerald-500/30 bg-emerald-500/10";
+    if (qoe >= 75) return "text-yellow-300 border-yellow-500/30 bg-yellow-500/10";
+    return "text-red-300 border-red-500/30 bg-red-500/10";
+  }, [metric]);
+
+  if (collapsed) {
+    return (
+      <div className="fixed bottom-4 right-4 z-[2147483000] flex items-center gap-2">
+        <button
+          onClick={toggleLang}
+          className="rounded-full border border-cyan-500/30 bg-slate-950/95 px-4 py-2 text-xs font-black text-cyan-300 shadow-2xl backdrop-blur-xl"
+        >
+          <Globe2 className="mr-2 inline h-4 w-4" />
+          {lang.toUpperCase()}
+        </button>
+
+        <button
+          onClick={() => setCollapsed(false)}
+          className="rounded-full border border-emerald-500/30 bg-slate-950/95 px-4 py-2 text-xs font-black text-emerald-300 shadow-2xl backdrop-blur-xl"
+        >
+          {t.show} Live
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed bottom-4 right-4 z-[2147483000] w-[430px] rounded-2xl border border-slate-700 bg-slate-950/95 p-4 text-white shadow-2xl backdrop-blur-xl">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-cyan-300" />
+            <p className="text-sm font-black">{t.live}</p>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${statusColor}`}>
+              {metric?.streaming_status || t.stable}
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-500">{t.realProbe}</p>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={toggleLang}
+            className="rounded-lg border border-cyan-500/30 px-3 py-2 text-xs font-black text-cyan-300 hover:bg-cyan-500/10"
+          >
+            {lang.toUpperCase()}
+          </button>
+          <button
+            onClick={() => setCollapsed(true)}
+            className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-bold text-slate-300 hover:bg-slate-800"
+          >
+            {t.hide}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-5 gap-2">
+        <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-2">
+          <Zap className="mb-1 h-3.5 w-3.5 text-cyan-300" />
+          <p className="text-[10px] text-slate-500">{t.throughput}</p>
+          <p className="text-sm font-black">{metric?.throughput ?? 0}</p>
+          <p className="text-[10px] text-slate-500">Mbps</p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-2">
+          <Gauge className="mb-1 h-3.5 w-3.5 text-yellow-300" />
+          <p className="text-[10px] text-slate-500">{t.latency}</p>
+          <p className="text-sm font-black">{metric?.latency ?? 0}</p>
+          <p className="text-[10px] text-slate-500">ms</p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-2">
+          <Radio className="mb-1 h-3.5 w-3.5 text-purple-300" />
+          <p className="text-[10px] text-slate-500">{t.jitter}</p>
+          <p className="text-sm font-black">{metric?.jitter ?? 0}</p>
+          <p className="text-[10px] text-slate-500">ms</p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-2">
+          <Activity className="mb-1 h-3.5 w-3.5 text-emerald-300" />
+          <p className="text-[10px] text-slate-500">{t.qoe}</p>
+          <p className="text-sm font-black">{metric?.qoe_score ?? 0}</p>
+          <p className="text-[10px] text-slate-500">score</p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-2">
+          <Bell className="mb-1 h-3.5 w-3.5 text-red-300" />
+          <p className="text-[10px] text-slate-500">{t.alerts}</p>
+          <p className="text-sm font-black">{alerts.length}</p>
+          <p className="text-[10px] text-slate-500">active</p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-[11px] text-slate-400">
+        {t.source}:{" "}
+        <span className="font-bold text-cyan-300">{metric?.source || "real-qoe-probe"}</span>
+        {" "}• {metric?.timestamp || "-"}
+      </div>
+    </div>
+  );
+}

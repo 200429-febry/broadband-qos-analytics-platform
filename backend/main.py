@@ -1,0 +1,2666 @@
+from fastapi import FastAPI, WebSocket, Header, UploadFile, File, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from coverage_loader import load_coverage_data
+from database import SessionLocal
+from pydantic import BaseModel
+from typing import Optional
+from passlib.context import CryptContext
+from jose import jwt, JWTError
+from datetime import datetime, timedelta
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
+import time
+import json
+import asyncio
+import requests
+import os
+from google.cloud import storage
+
+
+
+USER_ASSET_BUCKET = os.environ.get("USER_ASSET_BUCKET", "qos-user-assets-gen-lang-client-0341860128")
+
+def delete_gcs_public_url(public_url: str):
+    try:
+        if not public_url:
+            return
+
+        marker = f"https://storage.googleapis.com/{USER_ASSET_BUCKET}/"
+
+        if marker not in public_url:
+            return
+
+        object_name = public_url.split(marker, 1)[1]
+        client = storage.Client()
+        bucket = client.bucket(USER_ASSET_BUCKET)
+        blob = bucket.blob(object_name)
+        blob.delete()
+    except Exception as e:
+        print("Failed deleting GCS asset:", e)
+
+
+app = FastAPI(title="QoS Analytics Platform API")
+
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8001")
+JWT_SECRET = os.getenv("JWT_SECRET", "supersecretjwtkey")
+JWT_ALGORITHM = "HS256"
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+REQUEST_COUNT = Counter(
+    "qos_api_requests_total",
+    "Total API requests",
+    ["method", "endpoint", "status_code"]
+)
+
+REQUEST_LATENCY = Histogram(
+    "qos_api_request_latency_seconds",
+    "API request latency",
+    ["method", "endpoint"]
+)
+
+QOS_THROUGHPUT = Gauge(
+    "qos_current_throughput_mbps",
+    "Current QoS throughput in Mbps"
+)
+
+QOS_LATENCY = Gauge(
+    "qos_current_latency_ms",
+    "Current QoS latency in ms"
+)
+
+QOS_PACKET_LOSS = Gauge(
+    "qos_current_packet_loss_percent",
+    "Current QoS packet loss percentage"
+)
+
+QOS_JITTER = Gauge(
+    "qos_current_jitter_ms",
+    "Current QoS jitter in ms"
+)
+
+ML_PREDICTED_THROUGHPUT = Gauge(
+    "qos_ml_predicted_throughput_mbps",
+    "ML predicted QoS throughput in Mbps"
+)
+
+ML_PREDICTED_LATENCY = Gauge(
+    "qos_ml_predicted_latency_ms",
+    "ML predicted QoS latency in ms"
+)
+
+ML_PREDICTED_PACKET_LOSS = Gauge(
+    "qos_ml_predicted_packet_loss_percent",
+    "ML predicted QoS packet loss percentage"
+)
+
+ML_QOS_SCORE = Gauge(
+    "qos_ml_qos_score",
+    "ML calculated QoS health score"
+)
+
+ML_ANOMALY_SCORE = Gauge(
+    "qos_ml_anomaly_score",
+    "ML anomaly score"
+)
+
+ML_CONFIDENCE = Gauge(
+    "qos_ml_confidence",
+    "ML prediction confidence"
+)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+
+class UpdateUserRequest(BaseModel):
+    username: str
+    role: str
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+
+class QoSMetricInput(BaseModel):
+    node_id: Optional[str] = "client-probe"
+    throughput: float
+    latency: float
+    jitter: float
+    packet_loss: float
+    bandwidth: float
+
+def verify_token_and_role(authorization: str, allowed_roles: list):
+    if authorization is None:
+        return {"allowed": False, "error": "Missing authorization header"}
+
+    try:
+        token = authorization.replace("Bearer ", "")
+
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=[JWT_ALGORITHM]
+        )
+
+        role = payload.get("role")
+        username = payload.get("sub")
+
+        if role not in allowed_roles:
+            return {
+                "allowed": False,
+                "error": "Access denied",
+                "username": username,
+                "role": role
+            }
+
+        return {
+            "allowed": True,
+            "username": username,
+            "role": role
+        }
+
+    except JWTError:
+        return {
+            "allowed": False,
+            "error": "Invalid or expired token"
+        }
+
+
+@app.get("/api/health")
+def health_check():
+    db = SessionLocal()
+
+    try:
+        db.execute(text("SELECT 1"))
+
+        ml_status = "operational"
+
+        try:
+            requests.get(f"{ML_SERVICE_URL}/health", timeout=3)
+        except:
+            ml_status = "offline"
+
+        return {
+            "status": "healthy",
+            "api_service": "operational",
+            "database": "operational",
+            "ml_service": ml_status,
+            "uptime": "99.9%"
+        }
+
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+
+    finally:
+        db.close()
+        
+
+@app.get("/api/coverage")
+def get_coverage(
+    limit: int = 5000,
+    min_lat: float = -6.7,
+    max_lat: float = -5.9,
+    min_lon: float = 106.4,
+    max_lon: float = 107.2,
+):
+    towers = load_coverage_data(
+        limit=limit,
+        min_lat=min_lat,
+        max_lat=max_lat,
+        min_lon=min_lon,
+        max_lon=max_lon,
+    )
+
+    return {
+        "count": len(towers),
+        "bounds": {
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon,
+        },
+        "towers": towers,
+    }
+
+@app.middleware("http")
+async def prometheus_middleware(request, call_next):
+    start_time = time.time()
+
+    response = await call_next(request)
+
+    latency = time.time() - start_time
+
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        status_code=response.status_code
+    ).inc()
+
+    REQUEST_LATENCY.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(latency)
+
+    return response
+
+@app.get("/metrics")
+def metrics():
+    return Response(
+        generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
+    )
+
+@app.post("/api/auth/login")
+def login(data: LoginRequest):
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    id,
+                    username,
+                    role,
+                    hashed_password
+                FROM users
+                WHERE username = :username
+                LIMIT 1
+            """),
+            {"username": data.username}
+        ).fetchone()
+
+        if result is None:
+            return {"error": "Invalid username or password"}
+
+        if not pwd_context.verify(data.password, result[3]):
+            return {"error": "Invalid username or password"}
+
+        token_payload = {
+            "sub": result[1],
+            "role": result[2],
+            "exp": datetime.utcnow() + timedelta(hours=8)
+        }
+
+        access_token = jwt.encode(
+            token_payload,
+            JWT_SECRET,
+            algorithm=JWT_ALGORITHM
+        )
+
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": result[0],
+                "username": result[1],
+                "role": result[2]
+            }
+        }
+
+    finally:
+        db.close()
+
+
+@app.get("/api/auth/me")
+def get_current_user(authorization: str = Header(None)):
+    if authorization is None:
+        return {
+            "authenticated": False,
+            "error": "Missing authorization header"
+        }
+
+    try:
+        token = authorization.replace("Bearer ", "")
+
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=[JWT_ALGORITHM]
+        )
+
+        return {
+            "authenticated": True,
+            "username": payload.get("sub"),
+            "role": payload.get("role")
+        }
+
+    except JWTError:
+        return {
+            "authenticated": False,
+            "error": "Invalid or expired token"
+        }
+
+
+@app.get("/api/users")
+def get_users(authorization: str = Header(None)):
+    auth = verify_token_and_role(
+        authorization,
+        ["Admin", "Engineer", "Viewer"]
+    )
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    db = SessionLocal()
+
+    try:
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_url TEXT"))
+        db.commit()
+
+        result = db.execute(
+            text("""
+                SELECT
+                    id,
+                    username,
+                    role,
+                    created_at,
+                    email,
+                    photo_url,
+                    cover_url
+                FROM users
+                ORDER BY id ASC
+            """)
+        ).fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "username": row[1],
+                "role": row[2],
+                "created_at": row[3],
+                "email": row[4],
+                "photo_url": row[5],
+                "cover_url": row[6],
+            }
+            for row in result
+        ]
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+
+@app.post("/api/users")
+def create_user(data: CreateUserRequest, authorization: str = Header(None)):
+
+    auth = verify_token_and_role(
+        authorization,
+        ["Admin"]
+    )
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    hashed_password = pwd_context.hash(data.password)
+
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                INSERT INTO users (
+                    username,
+                    hashed_password,
+                    role
+                )
+                VALUES (
+                    :username,
+                    :hashed_password,
+                    :role
+                )
+                RETURNING id, username, role, created_at
+            """),
+            {
+                "username": data.username,
+                "hashed_password": hashed_password,
+                "role": data.role
+            }
+        ).fetchone()
+
+        db.commit()
+
+        return {
+            "id": result[0],
+            "username": result[1],
+            "role": result[2],
+            "created_at": str(result[3])
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {
+            "error": str(e)
+        }
+
+    finally:
+        db.close()
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    id,
+                    username,
+                    role,
+                    created_at
+                FROM users
+                ORDER BY id ASC
+            """)
+        ).fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "username": row[1],
+                "role": row[2],
+                "created_at": str(row[3])
+            }
+            for row in result
+        ]
+
+    finally:
+        db.close()
+
+
+@app.put("/api/users/{user_id}")
+def update_user(user_id: int, data: UpdateUserRequest, authorization: str = Header(None)):
+
+    auth = verify_token_and_role(authorization, ["Admin"])
+
+    if not auth["allowed"]:
+        return {
+            "error": auth["error"],
+            "role": auth.get("role")
+        }
+
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                UPDATE users
+                SET username = :username,
+                    role = :role
+                WHERE id = :user_id
+                RETURNING id, username, role, created_at
+            """),
+            {
+                "user_id": user_id,
+                "username": data.username,
+                "role": data.role
+            }
+        ).fetchone()
+
+        db.commit()
+
+        if result is None:
+            return {"error": "User not found"}
+
+        return {
+            "id": result[0],
+            "username": result[1],
+            "role": result[2],
+            "created_at": str(result[3])
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user(user_id: int, authorization: str = Header(None)):
+    auth = verify_token(authorization)
+
+    if not auth.get("authenticated"):
+        return {"error": "Invalid or expired token", "role": auth.get("role")}
+
+    if auth.get("role") != "Admin":
+        return {"error": "Admin access required", "role": auth.get("role")}
+
+    if user_id == 1:
+        return {"error": "Main admin user cannot be deleted"}
+
+    db = SessionLocal()
+
+    try:
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_url TEXT"))
+        db.commit()
+
+        row = db.execute(
+            text("SELECT username, role, photo_url, cover_url FROM users WHERE id=:user_id"),
+            {"user_id": user_id}
+        ).fetchone()
+
+        if not row:
+            return {"error": "User not found"}
+
+        delete_gcs_public_url(row[2])
+        delete_gcs_public_url(row[3])
+
+        db.execute(
+            text("DELETE FROM users WHERE id=:user_id"),
+            {"user_id": user_id}
+        )
+
+        db.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(100),
+                    role VARCHAR(50),
+                    action VARCHAR(150),
+                    detail TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        )
+
+        db.execute(
+            text("""
+                INSERT INTO audit_logs (username, role, action, detail)
+                VALUES (:username, :role, :action, :detail)
+            """),
+            {
+                "username": auth.get("username", "admin"),
+                "role": auth.get("role", "Admin"),
+                "action": "Delete User",
+                "detail": f"Deleted user {row[0]} and removed Cloud Storage profile assets",
+            }
+        )
+
+        db.commit()
+
+        return {
+            "status": "deleted",
+            "user_id": user_id,
+            "deleted_username": row[0],
+            "assets_removed": True
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+
+@app.post("/api/qos/ingest")
+def ingest_qos_metric(data: QoSMetricInput):
+    """
+    Ingest real client-side QoS measurement.
+    Data is measured from browser/device active probing, then stored in Cloud SQL.
+    """
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                INSERT INTO qosmetrics
+                (
+                    node_id,
+                    throughput,
+                    latency,
+                    jitter,
+                    packet_loss,
+                    bandwidth_utilization,
+                    timestamp
+                )
+                VALUES
+                (
+                    :node_id,
+                    :throughput,
+                    :latency,
+                    :jitter,
+                    :packet_loss,
+                    :bandwidth,
+                    NOW()
+                )
+                RETURNING id
+            """),
+            {
+                "node_id": data.node_id,
+                "throughput": data.throughput,
+                "latency": data.latency,
+                "jitter": data.jitter,
+                "packet_loss": data.packet_loss,
+                "bandwidth": data.bandwidth,
+            }
+        ).fetchone()
+
+        db.commit()
+
+        return {
+            "status": "ingested",
+            "source": "real-client-probe",
+            "id": result[0],
+            "node_id": data.node_id,
+            "throughput": data.throughput,
+            "latency": data.latency,
+            "jitter": data.jitter,
+            "packet_loss": data.packet_loss,
+            "bandwidth": data.bandwidth
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
+
+
+@app.get("/api/qos/metrics")
+def get_qos_metrics():
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    throughput,
+                    latency,
+                    jitter,
+                    packet_loss,
+                    bandwidth_utilization
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 1
+            """)
+        ).fetchone()
+
+        if result:
+          QOS_THROUGHPUT.set(result[0])
+          QOS_LATENCY.set(result[1])
+          QOS_JITTER.set(result[2])
+          QOS_PACKET_LOSS.set(result[3])
+
+        if result is None:
+            return {"message": "No QoS data found"}
+
+        return {
+            "throughput": result[0],
+            "latency": result[1],
+            "jitter": result[2],
+            "packet_loss": result[3],
+            "bandwidth": result[4]
+        }
+
+    finally:
+        db.close()
+
+
+@app.get("/api/qos/history")
+def get_qos_history():
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    throughput,
+                    latency,
+                    jitter,
+                    packet_loss,
+                    timestamp
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 20
+            """)
+        ).fetchall()
+
+        return [
+            {
+                "throughput": row[0],
+                "latency": row[1],
+                "jitter": row[2],
+                "packet_loss": row[3],
+                "timestamp": str(row[4])
+            }
+            for row in result
+        ]
+
+    finally:
+        db.close()
+
+
+@app.get("/api/alerts")
+def get_alerts():
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    id,
+                    latency,
+                    packet_loss,
+                    jitter,
+                    timestamp
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 30
+            """)
+        ).fetchall()
+
+        alerts = []
+
+        for row in result:
+            metric_id = row[0]
+            latency = row[1]
+            packet_loss = row[2]
+            jitter = row[3]
+            timestamp = row[4]
+
+            if packet_loss >= 3:
+                alerts.append({
+                    "id": metric_id,
+                    "type": "critical",
+                    "message": "Critical Packet Loss Detected",
+                    "metric": f"{packet_loss}%",
+                    "time": str(timestamp)
+                })
+
+            elif packet_loss >= 2:
+                alerts.append({
+                    "id": metric_id,
+                    "type": "warning",
+                    "message": "High Packet Loss Detected",
+                    "metric": f"{packet_loss}%",
+                    "time": str(timestamp)
+                })
+
+            if latency >= 100:
+                alerts.append({
+                    "id": metric_id + 100000,
+                    "type": "critical",
+                    "message": "Critical Latency Spike Detected",
+                    "metric": f"{latency} ms",
+                    "time": str(timestamp)
+                })
+
+            elif latency >= 80:
+                alerts.append({
+                    "id": metric_id + 200000,
+                    "type": "warning",
+                    "message": "High Latency Detected",
+                    "metric": f"{latency} ms",
+                    "time": str(timestamp)
+                })
+
+            if jitter >= 30:
+                alerts.append({
+                    "id": metric_id + 300000,
+                    "type": "warning",
+                    "message": "High Jitter Detected",
+                    "metric": f"{jitter} ms",
+                    "time": str(timestamp)
+                })
+
+        return alerts[:20]
+
+    finally:
+        db.close()
+
+
+@app.post("/api/ml/predict")
+def ml_predict():
+    db = SessionLocal()
+
+    try:
+        result = db.execute(
+            text("""
+                SELECT
+                    throughput,
+                    latency,
+                    jitter,
+                    packet_loss,
+                    bandwidth_utilization
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 1
+            """)
+        ).fetchone()
+
+        if result is None:
+            return {"message": "No QoS data found"}
+
+        payload = {
+            "throughput": result[0],
+            "latency": result[1],
+            "jitter": result[2],
+            "packet_loss": result[3],
+            "bandwidth": result[4]
+        }
+
+        response = requests.post(
+            f"{ML_SERVICE_URL}/predict",
+            json=payload,
+            timeout=10
+        )
+
+        response.raise_for_status()
+
+        prediction = response.json()
+
+        ML_PREDICTED_THROUGHPUT.set(
+            prediction.get("predicted_throughput", 0)
+        )
+
+        ML_PREDICTED_LATENCY.set(
+            prediction.get("predicted_latency", 0)
+        )
+
+        ML_PREDICTED_PACKET_LOSS.set(
+            prediction.get("predicted_packet_loss", 0)
+        )
+
+        ML_QOS_SCORE.set(
+            prediction.get("qos_score", 0)
+        )
+
+        ML_ANOMALY_SCORE.set(
+            prediction.get("anomaly_score", 0)
+        )
+
+        ML_CONFIDENCE.set(
+            prediction.get("confidence", 0)
+        )
+
+        return prediction
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+@app.websocket("/api/ws/realtime")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+
+    try:
+        while True:
+            db = SessionLocal()
+
+            try:
+                result = db.execute(
+                    text("""
+                        SELECT
+                            throughput,
+                            latency,
+                            jitter,
+                            packet_loss
+                        FROM qosmetrics
+                        ORDER BY id DESC
+                        LIMIT 1
+                    """)
+                ).fetchone()
+
+                if result:
+                    data = {
+                        "throughput": result[0],
+                        "latency": result[1],
+                        "jitter": result[2],
+                        "packet_loss": result[3]
+                    }
+
+                    await websocket.send_text(json.dumps(data))
+
+            finally:
+                db.close()
+
+            await asyncio.sleep(5)
+
+    except Exception as e:
+        print("WebSocket closed:", e)
+@app.get("/api/admin/database/status")
+def admin_database_status():
+    db = SessionLocal()
+
+    try:
+        qos_count = db.execute(
+            text("SELECT COUNT(*) FROM qosmetrics")
+        ).scalar()
+
+        user_count = db.execute(
+            text("SELECT COUNT(*) FROM users")
+        ).scalar()
+
+        prediction_count = db.execute(
+            text("SELECT COUNT(*) FROM predictions")
+        ).scalar()
+
+        latest_metrics = db.execute(
+            text("""
+                SELECT
+                    node_id,
+                    throughput,
+                    latency,
+                    jitter,
+                    packet_loss,
+                    bandwidth_utilization
+                FROM qosmetrics
+                ORDER BY id DESC
+                LIMIT 10
+            """)
+        ).fetchall()
+
+        return {
+            "cloudsql": {
+                "instance": "qos-db",
+                "engine": "PostgreSQL 15",
+                "region": "asia-southeast2-b",
+                "status": "RUNNABLE",
+                "tables": {
+                    "qosmetrics": qos_count,
+                    "users": user_count,
+                    "predictions": prediction_count
+                }
+            },
+            "bigquery": {
+                "dataset": "qos_analytics",
+                "tables": [
+                    "telemetry",
+                    "telemetry_raw",
+                    "telemetry_stream",
+                    "telemetry_stream_parsed"
+                ]
+            },
+            "latest_metrics": [
+                {
+                    "node_id": row[0],
+                    "throughput": row[1],
+                    "latency": row[2],
+                    "jitter": row[3],
+                    "packet_loss": row[4],
+                    "bandwidth": row[5]
+                }
+                for row in latest_metrics
+            ]
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "cloudsql": {
+                "instance": "qos-db",
+                "engine": "PostgreSQL 15",
+                "region": "asia-southeast2-b",
+                "status": "ERROR"
+            }
+        }
+
+    finally:
+        db.close()
+
+@app.post("/api/audit/log")
+def create_audit_log(payload: dict):
+    db = SessionLocal()
+
+    try:
+        username = payload.get("username", "unknown")
+        role = payload.get("role", "unknown")
+        action = payload.get("action", "unknown")
+        detail = payload.get("detail", "-")
+
+        db.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(100),
+                    role VARCHAR(50),
+                    action VARCHAR(150),
+                    detail TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        )
+
+        db.execute(
+            text("""
+                INSERT INTO audit_logs (username, role, action, detail)
+                VALUES (:username, :role, :action, :detail)
+            """),
+            {
+                "username": username,
+                "role": role,
+                "action": action,
+                "detail": detail,
+            }
+        )
+
+        db.commit()
+
+        return {"status": "logged"}
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+@app.get("/api/admin/audit/logs")
+def get_audit_logs():
+    db = SessionLocal()
+
+    try:
+        db.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(100),
+                    role VARCHAR(50),
+                    action VARCHAR(150),
+                    detail TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        )
+
+        rows = db.execute(
+            text("""
+                SELECT id, username, role, action, detail, created_at
+                FROM audit_logs
+                ORDER BY id DESC
+                LIMIT 50
+            """)
+        ).fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "username": row[1],
+                "role": row[2],
+                "action": row[3],
+                "detail": row[4],
+                "created_at": str(row[5]),
+            }
+            for row in rows
+        ]
+
+    finally:
+        db.close()
+
+@app.post("/api/auth/google/verify")
+def verify_google_user(payload: dict):
+    db = SessionLocal()
+
+    try:
+        email = payload.get("email")
+        name = payload.get("name", "")
+        image = payload.get("image", "")
+
+        if not email:
+            return {"allowed": False, "error": "Missing email"}
+
+        row = db.execute(
+            text("""
+                SELECT id, username, role
+                FROM users
+                WHERE email = :email
+                LIMIT 1
+            """),
+            {"email": email}
+        ).fetchone()
+
+        if not row:
+            return {
+                "allowed": False,
+                "error": "Google account is not registered in this platform"
+            }
+
+        db.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(100),
+                    role VARCHAR(50),
+                    action VARCHAR(150),
+                    detail TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        )
+
+        db.execute(
+            text("""
+                INSERT INTO audit_logs (username, role, action, detail)
+                VALUES (:username, :role, :action, :detail)
+            """),
+            {
+                "username": row[1],
+                "role": row[2],
+                "action": "Google Sign-In",
+                "detail": f"User authenticated using Google account: {email}",
+            }
+        )
+
+        db.commit()
+
+        return {
+            "allowed": True,
+            "id": row[0],
+            "username": row[1],
+            "role": row[2],
+            "email": email,
+            "name": name,
+            "image": image,
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"allowed": False, "error": str(e)}
+
+    finally:
+        db.close()
+
+@app.post("/api/users/{user_id}/profile-image")
+def update_user_profile_image(user_id: int, payload: dict):
+    db = SessionLocal()
+
+    try:
+        photo_url = payload.get("photo_url", "")
+        cover_url = payload.get("cover_url", "")
+
+        db.execute(
+            text("""
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS photo_url TEXT
+            """)
+        )
+
+        db.execute(
+            text("""
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS cover_url TEXT
+            """)
+        )
+
+        db.execute(
+            text("""
+                UPDATE users
+                SET photo_url = :photo_url,
+                    cover_url = :cover_url
+                WHERE id = :user_id
+            """),
+            {
+                "photo_url": photo_url,
+                "cover_url": cover_url,
+                "user_id": user_id,
+            }
+        )
+
+        db.commit()
+
+        return {
+            "status": "updated",
+            "user_id": user_id,
+            "photo_url": photo_url,
+            "cover_url": cover_url,
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+@app.post("/api/users/{user_id}/assets")
+async def upload_user_assets(
+    user_id: int,
+    photo: UploadFile = File(None),
+    cover: UploadFile = File(None)
+):
+    db = SessionLocal()
+
+    try:
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_url TEXT"))
+        db.commit()
+
+        client = storage.Client()
+        bucket = client.bucket(USER_ASSET_BUCKET)
+
+        photo_url = None
+        cover_url = None
+
+        if photo:
+            ext = os.path.splitext(photo.filename or "profile.jpg")[1] or ".jpg"
+            object_name = f"users/{user_id}/profile-{int(time.time())}{ext}"
+            blob = bucket.blob(object_name)
+            blob.cache_control = "no-store"
+            blob.upload_from_file(photo.file, content_type=photo.content_type or "image/jpeg")
+            try:
+                blob.patch()
+            except Exception:
+                pass
+            photo_url = f"https://storage.googleapis.com/{USER_ASSET_BUCKET}/{object_name}"
+
+        if cover:
+            ext = os.path.splitext(cover.filename or "cover.jpg")[1] or ".jpg"
+            object_name = f"users/{user_id}/cover-{int(time.time())}{ext}"
+            blob = bucket.blob(object_name)
+            blob.cache_control = "no-store"
+            blob.upload_from_file(cover.file, content_type=cover.content_type or "image/jpeg")
+            try:
+                blob.patch()
+            except Exception:
+                pass
+            cover_url = f"https://storage.googleapis.com/{USER_ASSET_BUCKET}/{object_name}"
+
+        if photo_url and cover_url:
+            db.execute(
+                text("UPDATE users SET photo_url=:photo_url, cover_url=:cover_url WHERE id=:user_id"),
+                {"photo_url": photo_url, "cover_url": cover_url, "user_id": user_id}
+            )
+        elif photo_url:
+            db.execute(
+                text("UPDATE users SET photo_url=:photo_url WHERE id=:user_id"),
+                {"photo_url": photo_url, "user_id": user_id}
+            )
+        elif cover_url:
+            db.execute(
+                text("UPDATE users SET cover_url=:cover_url WHERE id=:user_id"),
+                {"cover_url": cover_url, "user_id": user_id}
+            )
+
+        db.commit()
+
+        return {
+            "status": "uploaded",
+            "user_id": user_id,
+            "photo_url": photo_url,
+            "cover_url": cover_url
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+@app.post("/api/users/{user_id}/email")
+def update_user_email(user_id: int, payload: dict):
+    db = SessionLocal()
+
+    try:
+        email = payload.get("email")
+
+        if not email:
+            return {"error": "Missing email"}
+
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT"))
+
+        db.execute(
+            text("UPDATE users SET email=:email WHERE id=:user_id"),
+            {"email": email, "user_id": user_id}
+        )
+
+        db.commit()
+
+        return {
+            "status": "updated",
+            "user_id": user_id,
+            "email": email
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+@app.post("/api/auth/google/token")
+def google_token_login(payload: dict):
+    db = SessionLocal()
+
+    try:
+        email = (payload.get("email") or "").strip().lower()
+        name = (payload.get("name") or "").strip()
+        team_phone = (payload.get("team_phone") or "").strip()
+        aksara_team = bool(payload.get("aksara_team"))
+
+        if not email:
+            return {"error": "Missing email"}
+
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT"))
+        db.commit()
+
+        admin_team_phones = {
+            "0895333630670": {"username": "Febry", "role": "Admin"},
+            "085717286077": {"username": "Sandy", "role": "Admin"},
+        }
+
+        team_identity = admin_team_phones.get(team_phone)
+
+        role = "Viewer"
+        username = name.replace(" ", "_").lower() if name else email.split("@")[0]
+
+        if aksara_team and team_identity:
+            username = team_identity["username"]
+            role = team_identity["role"]
+
+            # Prioritas AKSARA Team:
+            # Kalau email ini sebelumnya nyangkut di akun lain, lepas dulu.
+            db.execute(
+                text("""
+                    UPDATE users
+                    SET email = NULL
+                    WHERE LOWER(email) = LOWER(:email)
+                      AND username <> :username
+                """),
+                {
+                    "email": email,
+                    "username": username,
+                }
+            )
+
+            # Hubungkan Google email ke akun team existing: Febry/Sandy.
+            team_row = db.execute(
+                text("""
+                    SELECT id, username, role, email
+                    FROM users
+                    WHERE username = :username
+                    LIMIT 1
+                """),
+                {"username": username}
+            ).fetchone()
+
+            if team_row:
+                db.execute(
+                    text("""
+                        UPDATE users
+                        SET email = :email,
+                            phone = :phone,
+                            role = :role
+                        WHERE username = :username
+                    """),
+                    {
+                        "email": email,
+                        "phone": team_phone,
+                        "role": role,
+                        "username": username,
+                    }
+                )
+                db.commit()
+
+        # 1. Cari berdasarkan email setelah linking/cleanup
+        row = db.execute(
+            text("""
+                SELECT id, username, role, email
+                FROM users
+                WHERE LOWER(email) = LOWER(:email)
+                LIMIT 1
+            """),
+            {"email": email}
+        ).fetchone()
+
+        # 2. Kalau belum ada email, tapi AKSARA Team valid, cari akun Febry/Sandy yang sudah ada
+        if not row and aksara_team and team_identity:
+            team_row = db.execute(
+                text("""
+                    SELECT id, username, role, email
+                    FROM users
+                    WHERE username = :username
+                    LIMIT 1
+                """),
+                {"username": username}
+            ).fetchone()
+
+            if team_row:
+                db.execute(
+                    text("""
+                        UPDATE users
+                        SET email = :email,
+                            phone = :phone,
+                            role = :role
+                        WHERE id = :user_id
+                    """),
+                    {
+                        "email": email,
+                        "phone": team_phone,
+                        "role": role,
+                        "user_id": team_row[0],
+                    }
+                )
+                db.commit()
+
+                row = db.execute(
+                    text("""
+                        SELECT id, username, role, email
+                        FROM users
+                        WHERE id = :user_id
+                        LIMIT 1
+                    """),
+                    {"user_id": team_row[0]}
+                ).fetchone()
+
+        # 3. Kalau benar-benar user baru, create Viewer atau Admin baru
+        if not row:
+            existing_username = db.execute(
+                text("SELECT id FROM users WHERE username = :username LIMIT 1"),
+                {"username": username}
+            ).fetchone()
+
+            if existing_username:
+                username = email.replace("@", "_").replace(".", "_")
+
+            db.execute(
+                text("""
+                    INSERT INTO users (username, role, hashed_password, email, phone, created_at)
+                    VALUES (:username, :role, :hashed_password, :email, :phone, :created_at)
+                """),
+                {
+                    "username": username,
+                    "role": role,
+                    "hashed_password": "GOOGLE_OAUTH_ACCOUNT",
+                    "email": email,
+                    "phone": team_phone if team_phone else None,
+                    "created_at": datetime.utcnow(),
+                }
+            )
+            db.commit()
+
+            row = db.execute(
+                text("""
+                    SELECT id, username, role, email
+                    FROM users
+                    WHERE LOWER(email) = LOWER(:email)
+                    LIMIT 1
+                """),
+                {"email": email}
+            ).fetchone()
+
+        token_payload = {
+            "sub": row[1],
+            "role": row[2],
+            "exp": datetime.utcnow() + timedelta(hours=8)
+        }
+
+        access_token = jwt.encode(
+            token_payload,
+            JWT_SECRET,
+            algorithm=JWT_ALGORITHM
+        )
+
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "id": row[0],
+            "username": row[1],
+            "role": row[2],
+            "email": row[3],
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+# ============================================================
+# REAL STREAMING QOE / TRAFFIC PROBE ENDPOINTS
+# These endpoints generate real browser-to-cloud traffic.
+# They are used to measure real latency, jitter, download Mbps,
+# upload Mbps, backend response time, and streaming QoE.
+# ============================================================
+
+from fastapi import Request, Response
+from fastapi.responses import StreamingResponse
+from collections import deque
+import os
+import time
+import uuid
+
+qoe_samples = deque(maxlen=500)
+
+@app.get("/api/qoe/ping")
+def qoe_ping():
+    return {
+        "status": "ok",
+        "probe": "real-client-cloud-latency",
+        "server_time": time.time(),
+        "request_id": str(uuid.uuid4())
+    }
+
+
+@app.get("/api/qoe/download")
+def qoe_download(size_kb: int = 1024):
+    size_kb = max(64, min(size_kb, 8192))
+    payload_size = size_kb * 1024
+
+    def generate_payload():
+        remaining = payload_size
+        chunk_size = 64 * 1024
+        while remaining > 0:
+            n = min(chunk_size, remaining)
+            remaining -= n
+            yield os.urandom(n)
+
+    headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "X-Probe-Type": "real-download-throughput",
+        "X-Probe-Size-Bytes": str(payload_size),
+    }
+
+    return StreamingResponse(
+        generate_payload(),
+        media_type="application/octet-stream",
+        headers=headers
+    )
+
+
+@app.post("/api/qoe/upload")
+async def qoe_upload(request: Request):
+    start = time.time()
+    body = await request.body()
+    end = time.time()
+
+    size_bytes = len(body)
+    duration_s = max(end - start, 0.000001)
+    server_mbps = (size_bytes * 8) / duration_s / 1_000_000
+
+    return {
+        "status": "ok",
+        "probe": "real-upload-throughput",
+        "received_bytes": size_bytes,
+        "server_receive_duration_ms": round(duration_s * 1000, 2),
+        "server_estimated_mbps": round(server_mbps, 2),
+        "server_time": end,
+        "request_id": str(uuid.uuid4())
+    }
+
+
+@app.post("/api/qoe/sample")
+async def save_qoe_sample(payload: dict):
+    sample = {
+        "id": str(uuid.uuid4()),
+        "timestamp": time.time(),
+        **payload
+    }
+
+    qoe_samples.appendleft(sample)
+
+    return {
+        "status": "saved",
+        "message": "Real QoE sample received from browser-side traffic probe",
+        "sample": sample
+    }
+
+
+@app.get("/api/qoe/latest")
+def get_latest_qoe_samples():
+    return {
+        "count": len(qoe_samples),
+        "samples": list(qoe_samples)[:50]
+    }
+
+@app.get("/api/qoe/download-fixed")
+def qoe_download_fixed(size_kb: int = 2048):
+    size_kb = max(64, min(size_kb, 16384))
+    payload_size = size_kb * 1024
+
+    payload = b"0" * payload_size
+
+    headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Content-Length": str(payload_size),
+        "X-Probe-Type": "real-fixed-download-throughput",
+        "X-Probe-Size-Bytes": str(payload_size),
+    }
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers=headers
+    )
+
+
+# === REAL QOE OVERRIDE START ===
+# Override legacy QoS endpoints with real browser-side Streaming QoE samples.
+# This makes Dashboard, Realtime Monitor, Analytics, Alerts, Reports, and Bell Count
+# follow real active traffic probes instead of generated/demo telemetry.
+
+from fastapi.responses import JSONResponse
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _latest_real_qoe_sample():
+    try:
+        if len(qoe_samples) > 0:
+            return list(qoe_samples)[0]
+    except Exception:
+        pass
+    return None
+
+
+def _qoe_to_qos_metric(sample):
+    if not sample:
+        return {
+            "throughput": 0.0,
+            "latency": 0.0,
+            "jitter": 0.0,
+            "packet_loss": 0.0,
+            "bandwidth": 0.0,
+            "source": "real-qoe-probe",
+            "status": "waiting_for_real_streaming_probe"
+        }
+
+    qoe_score = _safe_float(sample.get("qoeScore", 0))
+    latency = _safe_float(sample.get("latency", 0))
+    jitter = _safe_float(sample.get("jitter", 0))
+    download = _safe_float(sample.get("downloadMbps", 0))
+
+    # Packet loss cannot be read directly by browser security model.
+    # This is a QoE-based approximation, not a fake random value.
+    if qoe_score >= 85:
+        packet_loss = 0.0
+    elif qoe_score >= 70:
+        packet_loss = 0.2
+    elif qoe_score >= 50:
+        packet_loss = 0.8
+    else:
+        packet_loss = 1.5
+
+    return {
+        "throughput": round(download, 2),
+        "latency": round(latency, 2),
+        "jitter": round(jitter, 2),
+        "packet_loss": round(packet_loss, 2),
+        "bandwidth": round(download, 2),
+        "source": "real-qoe-probe",
+        "qoe_score": round(qoe_score, 2),
+        "streaming_status": sample.get("status", "UNKNOWN"),
+        "timestamp": sample.get("time") or sample.get("timestamp")
+    }
+
+
+def _qoe_history_as_qos():
+    try:
+        samples = list(qoe_samples)[:50]
+    except Exception:
+        samples = []
+
+    history = []
+    for sample in samples:
+        metric = _qoe_to_qos_metric(sample)
+        history.append({
+            "throughput": metric["throughput"],
+            "latency": metric["latency"],
+            "jitter": metric["jitter"],
+            "packet_loss": metric["packet_loss"],
+            "bandwidth": metric["bandwidth"],
+            "qoe_score": metric.get("qoe_score", 0),
+            "source": "real-qoe-probe",
+            "timestamp": sample.get("time") or sample.get("timestamp")
+        })
+
+    return history
+
+
+def _qoe_alerts():
+    try:
+        samples = list(qoe_samples)[:20]
+    except Exception:
+        samples = []
+
+    alerts = []
+    alert_id = 900000
+
+    for sample in samples:
+        latency = _safe_float(sample.get("latency", 0))
+        jitter = _safe_float(sample.get("jitter", 0))
+        download = _safe_float(sample.get("downloadMbps", 0))
+        upload = _safe_float(sample.get("uploadMbps", 0))
+        qoe = _safe_float(sample.get("qoeScore", 0))
+        t = sample.get("time") or sample.get("timestamp")
+
+        if qoe < 60:
+            alerts.append({
+                "id": alert_id,
+                "type": "critical",
+                "message": "Poor Streaming QoE Detected",
+                "metric": f"QoE {qoe}",
+                "time": t,
+                "source": "Real Streaming QoE"
+            })
+            alert_id += 1
+        elif qoe < 75:
+            alerts.append({
+                "id": alert_id,
+                "type": "warning",
+                "message": "Streaming QoE Degradation Detected",
+                "metric": f"QoE {qoe}",
+                "time": t,
+                "source": "Real Streaming QoE"
+            })
+            alert_id += 1
+
+        if latency >= 150:
+            alerts.append({
+                "id": alert_id,
+                "type": "critical",
+                "message": "Critical Real Latency Spike Detected",
+                "metric": f"{latency} ms",
+                "time": t,
+                "source": "Real Browser Probe"
+            })
+            alert_id += 1
+        elif latency >= 80:
+            alerts.append({
+                "id": alert_id,
+                "type": "warning",
+                "message": "High Real Latency Detected",
+                "metric": f"{latency} ms",
+                "time": t,
+                "source": "Real Browser Probe"
+            })
+            alert_id += 1
+
+        if jitter >= 80:
+            alerts.append({
+                "id": alert_id,
+                "type": "critical",
+                "message": "Critical Real Jitter Detected",
+                "metric": f"{jitter} ms",
+                "time": t,
+                "source": "Real Browser Probe"
+            })
+            alert_id += 1
+        elif jitter >= 30:
+            alerts.append({
+                "id": alert_id,
+                "type": "warning",
+                "message": "High Real Jitter Detected",
+                "metric": f"{jitter} ms",
+                "time": t,
+                "source": "Real Browser Probe"
+            })
+            alert_id += 1
+
+        if download > 0 and download < 3:
+            alerts.append({
+                "id": alert_id,
+                "type": "critical",
+                "message": "Very Low Real Download Throughput",
+                "metric": f"{download} Mbps",
+                "time": t,
+                "source": "Real Download Probe"
+            })
+            alert_id += 1
+        elif download > 0 and download < 8:
+            alerts.append({
+                "id": alert_id,
+                "type": "warning",
+                "message": "Low Real Download Throughput",
+                "metric": f"{download} Mbps",
+                "time": t,
+                "source": "Real Download Probe"
+            })
+            alert_id += 1
+
+        if upload > 0 and upload < 1:
+            alerts.append({
+                "id": alert_id,
+                "type": "warning",
+                "message": "Low Real Upload Throughput",
+                "metric": f"{upload} Mbps",
+                "time": t,
+                "source": "Real Upload Probe"
+            })
+            alert_id += 1
+
+    return alerts
+
+
+@app.middleware("http")
+async def real_qoe_override_middleware(request, call_next):
+    path = request.url.path
+
+    if path == "/api/qos/metrics":
+        sample = _latest_real_qoe_sample()
+        return JSONResponse(_qoe_to_qos_metric(sample))
+
+    if path == "/api/qos/history":
+        return JSONResponse(_qoe_history_as_qos())
+
+    if path == "/api/alerts":
+        return JSONResponse(_qoe_alerts())
+
+    return await call_next(request)
+
+# === REAL QOE OVERRIDE END ===
+
+
+# === SAFE USER ROLE PERSISTENCE PATCH START ===
+# Safe middleware:
+# - Does not read request body except for the exact endpoints it fully handles.
+# - Keeps Google Sign-In working even if DB lookup fails.
+# - Makes role update persistent in users table when DB is available.
+
+import json as _json_safe_role
+import os as _os_safe_role
+import re as _re_safe_role
+from datetime import datetime as _dt_safe_role, timedelta as _td_safe_role
+
+try:
+    import psycopg2 as _psycopg2_safe_role
+except Exception:
+    _psycopg2_safe_role = None
+
+try:
+    from jose import jwt as _jwt_safe_role
+except Exception:
+    _jwt_safe_role = None
+
+from starlette.responses import JSONResponse as _JSONResponseSafeRole
+
+
+def _safe_role_db_url():
+    url = (
+        _os_safe_role.getenv("DATABASE_URL")
+        or _os_safe_role.getenv("POSTGRES_URL")
+        or _os_safe_role.getenv("SQLALCHEMY_DATABASE_URL")
+        or ""
+    )
+
+    if url.startswith("postgresql+psycopg2://"):
+        url = url.replace("postgresql+psycopg2://", "postgresql://", 1)
+
+    return url
+
+
+def _safe_role_conn():
+    if _psycopg2_safe_role is None:
+        return None
+
+    url = _safe_role_db_url()
+    if not url:
+        return None
+
+    return _psycopg2_safe_role.connect(url)
+
+
+def _safe_role_valid(role):
+    return role if role in {"Admin", "Engineer", "Viewer"} else "Viewer"
+
+
+def _safe_role_admin_emails():
+    raw = _os_safe_role.getenv("AKSARA_ADMIN_EMAILS", "febriyadi845@gmail.com")
+    return {x.strip().lower() for x in raw.split(",") if x.strip()}
+
+
+def _safe_role_columns(cur):
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'users'
+        """
+    )
+
+    return {row[0] for row in cur.fetchall()}
+
+
+def _safe_role_find_or_create_user(email, team_access=False):
+    email = (email or "").strip().lower()
+
+    if not email:
+        return None
+
+    conn = _safe_role_conn()
+
+    if conn is None:
+        role = "Admin" if email in _safe_role_admin_emails() else "Viewer"
+        return {
+            "id": 1 if role == "Admin" else 999,
+            "username": email.split("@")[0],
+            "email": email,
+            "role": role,
+        }
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cols = _safe_role_columns(cur)
+
+                if "email" in cols:
+                    cur.execute(
+                        """
+                        SELECT id, username, role, email
+                        FROM users
+                        WHERE lower(email) = lower(%s)
+                        ORDER BY id ASC
+                        LIMIT 1
+                        """,
+                        (email,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id, username, role
+                        FROM users
+                        WHERE lower(username) = lower(%s)
+                        ORDER BY id ASC
+                        LIMIT 1
+                        """,
+                        (email.split("@")[0],),
+                    )
+
+                row = cur.fetchone()
+
+                if row:
+                    if "email" in cols:
+                        return {
+                            "id": row[0],
+                            "username": row[1],
+                            "role": _safe_role_valid(row[2]),
+                            "email": row[3],
+                        }
+
+                    return {
+                        "id": row[0],
+                        "username": row[1],
+                        "role": _safe_role_valid(row[2]),
+                        "email": email,
+                    }
+
+                role = "Admin" if email in _safe_role_admin_emails() else "Viewer"
+
+                insert_cols = []
+                insert_vals = []
+
+                if "username" in cols:
+                    insert_cols.append("username")
+                    insert_vals.append(email.split("@")[0])
+
+                if "email" in cols:
+                    insert_cols.append("email")
+                    insert_vals.append(email)
+
+                if "role" in cols:
+                    insert_cols.append("role")
+                    insert_vals.append(role)
+
+                if "password" in cols:
+                    insert_cols.append("password")
+                    insert_vals.append("google-oauth")
+
+                if "password_hash" in cols:
+                    insert_cols.append("password_hash")
+                    insert_vals.append("google-oauth")
+
+                if "created_at" in cols:
+                    insert_cols.append("created_at")
+                    insert_vals.append(_dt_safe_role.utcnow())
+
+                placeholders = ",".join(["%s"] * len(insert_cols))
+                col_sql = ",".join(insert_cols)
+
+                cur.execute(
+                    f"""
+                    INSERT INTO users ({col_sql})
+                    VALUES ({placeholders})
+                    RETURNING id, username, role {", email" if "email" in cols else ""}
+                    """,
+                    tuple(insert_vals),
+                )
+
+                created = cur.fetchone()
+
+                return {
+                    "id": created[0],
+                    "username": created[1],
+                    "role": _safe_role_valid(created[2]),
+                    "email": created[3] if "email" in cols and len(created) > 3 else email,
+                }
+    finally:
+        conn.close()
+
+
+def _safe_role_update_user(user_id, username=None, role=None):
+    role = _safe_role_valid(role or "Viewer")
+    conn = _safe_role_conn()
+
+    if conn is None:
+        return None
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cols = _safe_role_columns(cur)
+
+                sets = []
+                vals = []
+
+                if username and "username" in cols:
+                    sets.append("username = %s")
+                    vals.append(username)
+
+                if "role" in cols:
+                    sets.append("role = %s")
+                    vals.append(role)
+
+                if not sets:
+                    return None
+
+                vals.append(user_id)
+
+                email_select = ", email" if "email" in cols else ""
+
+                cur.execute(
+                    f"""
+                    UPDATE users
+                    SET {", ".join(sets)}
+                    WHERE id = %s
+                    RETURNING id, username, role {email_select}
+                    """,
+                    tuple(vals),
+                )
+
+                row = cur.fetchone()
+
+                if not row:
+                    return None
+
+                return {
+                    "id": row[0],
+                    "username": row[1],
+                    "role": _safe_role_valid(row[2]),
+                    "email": row[3] if "email" in cols and len(row) > 3 else None,
+                }
+    finally:
+        conn.close()
+
+
+def _safe_role_token(user):
+    role = _safe_role_valid(user.get("role") or "Viewer")
+    email = user.get("email")
+    username = user.get("username") or (email.split("@")[0] if email else "user")
+
+    payload = {
+        "sub": username,
+        "role": role,
+        "email": email,
+    }
+
+    try:
+        if "create_access_token" in globals():
+            return create_access_token(payload)
+    except Exception:
+        pass
+
+    secret = (
+        globals().get("SECRET_KEY")
+        or _os_safe_role.getenv("JWT_SECRET")
+        or _os_safe_role.getenv("SECRET_KEY")
+        or "change-me"
+    )
+
+    algorithm = globals().get("ALGORITHM") or "HS256"
+
+    if _jwt_safe_role is None:
+        return ""
+
+    payload["exp"] = _dt_safe_role.utcnow() + _td_safe_role(days=30)
+
+    return _jwt_safe_role.encode(payload, secret, algorithm=algorithm)
+
+
+@app.middleware("http")
+async def safe_user_role_persistence_patch(request, call_next):
+    path = request.url.path
+    method = request.method.upper()
+
+    if method == "POST" and path == "/api/auth/google/token":
+        try:
+            raw = await request.body()
+            payload = _json_safe_role.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            payload = {}
+
+        email = payload.get("email")
+
+        if not email:
+            return _JSONResponseSafeRole({"error": "Email is required"}, status_code=400)
+
+        user = _safe_role_find_or_create_user(
+            email=email,
+            team_access=bool(payload.get("teamAccess")),
+        )
+
+        if not user:
+            return _JSONResponseSafeRole({"error": "Could not finalize Google login"}, status_code=500)
+
+        token = _safe_role_token(user)
+
+        return _JSONResponseSafeRole(
+            {
+                "access_token": token,
+                "token_type": "bearer",
+                "id": user.get("id"),
+                "username": user.get("username"),
+                "role": _safe_role_valid(user.get("role")),
+                "email": user.get("email") or email,
+            }
+        )
+
+    role_update_match = _re_safe_role.match(r"^/api/users/(\d+)$", path)
+
+    if method == "PUT" and role_update_match:
+        auth_header = request.headers.get("authorization") or ""
+
+        if not auth_header:
+            return _JSONResponseSafeRole({"error": "Unauthorized"}, status_code=401)
+
+        try:
+            raw = await request.body()
+            payload = _json_safe_role.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            payload = {}
+
+        user_id = int(role_update_match.group(1))
+        username = payload.get("username")
+        role = _safe_role_valid(payload.get("role") or "Viewer")
+
+        updated = _safe_role_update_user(user_id=user_id, username=username, role=role)
+
+        if not updated:
+            return _JSONResponseSafeRole(
+                {"error": "User not found or database unavailable"},
+                status_code=404,
+            )
+
+        return _JSONResponseSafeRole(
+            {
+                "status": "updated",
+                "message": "User role persisted successfully.",
+                **updated,
+            }
+        )
+
+    return await call_next(request)
+
+# === SAFE USER ROLE PERSISTENCE PATCH END ===
+
+
+# ============================================================
+# SESSION-AWARE REAL QOE ENDPOINTS
+# Each browser/device now has its own telemetry window.
+# This prevents laptop WiFi and phone SIM-card charts from
+# displaying the same global pattern.
+# ============================================================
+
+from fastapi import Query
+from collections import deque
+import time as _qoe_time
+
+if "qoe_samples" not in globals():
+    qoe_samples = deque(maxlen=2000)
+
+def _qoe_sid(sample: dict):
+    return (
+        sample.get("session_id")
+        or sample.get("client_session_id")
+        or sample.get("clientSessionId")
+        or sample.get("device_id")
+        or sample.get("deviceId")
+        or "global"
+    )
+
+def _qoe_norm(sample: dict):
+    throughput = (
+        sample.get("downloadMbps")
+        or sample.get("download_mbps")
+        or sample.get("throughput")
+        or sample.get("bandwidth")
+        or 0
+    )
+
+    qoe_score = (
+        sample.get("qoeScore")
+        or sample.get("qoe_score")
+        or sample.get("score")
+        or 0
+    )
+
+    packet_loss = (
+        sample.get("packet_loss")
+        or sample.get("packetLoss")
+        or sample.get("loss")
+        or 0
+    )
+
+    timestamp = (
+        sample.get("time")
+        or sample.get("timestamp_label")
+        or sample.get("timestamp")
+        or "-"
+    )
+
+    return {
+        "throughput": round(float(throughput or 0), 2),
+        "latency": round(float(sample.get("latency") or sample.get("backendMs") or 0), 2),
+        "jitter": round(float(sample.get("jitter") or 0), 2),
+        "packet_loss": round(float(packet_loss or 0), 2),
+        "bandwidth": round(float(throughput or 0), 2),
+        "qoe_score": round(float(qoe_score or 0), 2),
+        "source": sample.get("source") or "real-qoe-probe",
+        "timestamp": str(timestamp),
+        "session_id": _qoe_sid(sample),
+        "device_id": sample.get("device_id") or sample.get("deviceId") or "-",
+        "device_name": sample.get("device_name") or sample.get("deviceName") or "-",
+        "network_type": sample.get("network_type") or sample.get("networkType") or "-",
+        "user_agent": sample.get("user_agent") or sample.get("userAgent") or "-",
+    }
+
+def _qoe_session_samples(session_id: str = "", limit: int = 50):
+    rows = list(qoe_samples)
+    if session_id:
+        rows = [s for s in rows if _qoe_sid(s) == session_id]
+    return [_qoe_norm(s) for s in rows[:limit]]
+
+def _qoe_status(score: float, latency: float, jitter: float, throughput: float):
+    if score >= 90 and latency < 90 and jitter < 30 and throughput >= 10:
+        return "EXCELLENT"
+    if score >= 75 and latency < 140 and jitter < 50 and throughput >= 5:
+        return "STABLE"
+    if score >= 60 or latency < 220:
+        return "BUFFER RISK"
+    return "POOR"
+
+@app.get("/api/qoe/session-history")
+def qoe_session_history(
+    session_id: str = Query(default=""),
+    limit: int = Query(default=50)
+):
+    limit = max(1, min(int(limit), 200))
+    return _qoe_session_samples(session_id=session_id, limit=limit)
+
+@app.get("/api/qoe/session-metrics")
+def qoe_session_metrics(session_id: str = Query(default="")):
+    rows = _qoe_session_samples(session_id=session_id, limit=50)
+
+    if not rows:
+        return {
+            "throughput": 0,
+            "latency": 0,
+            "jitter": 0,
+            "packet_loss": 0,
+            "bandwidth": 0,
+            "source": "waiting-for-device-session",
+            "qoe_score": 0,
+            "streaming_status": "WAITING",
+            "timestamp": "-",
+            "session_id": session_id or "global",
+        }
+
+    latest = rows[0]
+    latest["streaming_status"] = _qoe_status(
+        float(latest.get("qoe_score") or 0),
+        float(latest.get("latency") or 0),
+        float(latest.get("jitter") or 0),
+        float(latest.get("throughput") or 0),
+    )
+    return latest
+
+@app.get("/api/qoe/session-alerts")
+def qoe_session_alerts(session_id: str = Query(default="")):
+    rows = _qoe_session_samples(session_id=session_id, limit=20)
+    alerts = []
+
+    if not rows:
+        return alerts
+
+    latest = rows[0]
+    latency = float(latest.get("latency") or 0)
+    jitter = float(latest.get("jitter") or 0)
+    throughput = float(latest.get("throughput") or 0)
+    qoe = float(latest.get("qoe_score") or 0)
+    loss = float(latest.get("packet_loss") or 0)
+
+    now = latest.get("timestamp") or "-"
+
+    def add_alert(level, message, metric, source):
+        alerts.append({
+            "id": int(_qoe_time.time() * 1000) + len(alerts),
+            "type": level,
+            "message": message,
+            "metric": metric,
+            "time": now,
+            "source": source,
+            "session_id": latest.get("session_id"),
+            "device_name": latest.get("device_name"),
+            "network_type": latest.get("network_type"),
+        })
+
+    if qoe < 60:
+        add_alert("critical", "Poor Device QoE Detected", f"QoE {qoe:.1f}", "Per-Device QoE")
+    elif qoe < 75:
+        add_alert("warning", "Buffer Risk on Current Device", f"QoE {qoe:.1f}", "Per-Device QoE")
+
+    if latency > 180:
+        add_alert("critical", "Critical Device Latency Spike", f"{latency:.1f} ms", "Per-Device Probe")
+    elif latency > 100:
+        add_alert("warning", "High Device Latency Detected", f"{latency:.1f} ms", "Per-Device Probe")
+
+    if jitter > 80:
+        add_alert("critical", "Critical Device Jitter Detected", f"{jitter:.1f} ms", "Per-Device Probe")
+    elif jitter > 35:
+        add_alert("warning", "High Device Jitter Detected", f"{jitter:.1f} ms", "Per-Device Probe")
+
+    if throughput < 3:
+        add_alert("critical", "Very Low Device Download Throughput", f"{throughput:.2f} Mbps", "Per-Device Download Probe")
+    elif throughput < 8:
+        add_alert("warning", "Low Device Download Throughput", f"{throughput:.2f} Mbps", "Per-Device Download Probe")
+
+    if loss > 1:
+        add_alert("critical", "Packet Loss Detected on Current Device", f"{loss:.2f}%", "Per-Device Probe")
+
+    return alerts
+
+# ============================================================
+# FORCE PER-DEVICE QOE TELEMETRY V2
+# Dedicated device-session storage. This avoids global history
+# being shared by laptop WiFi, phone SIM, and other browsers.
+# ============================================================
+
+from fastapi import Query as _QoeQuery
+from collections import deque as _QoeDeque
+import time as _qoe_time
+import uuid as _qoe_uuid
+
+if "qoe_device_samples_v2" not in globals():
+    qoe_device_samples_v2 = _QoeDeque(maxlen=5000)
+
+def _v2_float(v, default=0):
+    try:
+        if v is None or v == "":
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+def _v2_session_id(payload: dict):
+    return (
+        payload.get("session_id")
+        or payload.get("client_session_id")
+        or payload.get("clientSessionId")
+        or payload.get("device_id")
+        or payload.get("deviceId")
+        or "unknown-session"
+    )
+
+def _v2_status(qoe, latency, jitter, throughput, loss):
+    qoe = _v2_float(qoe)
+    latency = _v2_float(latency)
+    jitter = _v2_float(jitter)
+    throughput = _v2_float(throughput)
+    loss = _v2_float(loss)
+
+    if loss >= 1.0 or latency >= 220 or jitter >= 100 or throughput < 3:
+        return "POOR"
+    if qoe < 75 or latency >= 120 or jitter >= 45 or throughput < 8:
+        return "BUFFER RISK"
+    if qoe < 90 or latency >= 80 or jitter >= 25:
+        return "STABLE"
+    return "EXCELLENT"
+
+def _v2_normalize(payload: dict):
+    throughput = (
+        payload.get("downloadMbps")
+        or payload.get("download_mbps")
+        or payload.get("throughput")
+        or payload.get("bandwidth")
+        or 0
+    )
+
+    qoe = (
+        payload.get("qoeScore")
+        or payload.get("qoe_score")
+        or payload.get("score")
+        or 0
+    )
+
+    latency = (
+        payload.get("latency")
+        or payload.get("backendMs")
+        or payload.get("backend_ms")
+        or 0
+    )
+
+    jitter = payload.get("jitter") or 0
+    loss = payload.get("packet_loss") or payload.get("packetLoss") or payload.get("loss") or 0
+
+    status = (
+        payload.get("status")
+        or payload.get("streaming_status")
+        or _v2_status(qoe, latency, jitter, throughput, loss)
+    )
+
+    now_label = payload.get("time") or payload.get("timestamp_label")
+    if not now_label:
+        try:
+            now_label = _qoe_time.strftime("%I:%M:%S %p")
+        except Exception:
+            now_label = "-"
+
+    return {
+        "id": payload.get("id") or str(_qoe_uuid.uuid4()),
+        "timestamp_epoch": _v2_float(payload.get("timestamp_epoch") or payload.get("client_timestamp") or _qoe_time.time()),
+        "timestamp": str(now_label),
+        "time": str(now_label),
+
+        "throughput": round(_v2_float(throughput), 2),
+        "downloadMbps": round(_v2_float(throughput), 2),
+        "latency": round(_v2_float(latency), 2),
+        "jitter": round(_v2_float(jitter), 2),
+        "packet_loss": round(_v2_float(loss), 2),
+        "bandwidth": round(_v2_float(throughput), 2),
+        "qoe_score": round(_v2_float(qoe), 2),
+        "qoeScore": round(_v2_float(qoe), 2),
+        "streaming_status": status,
+        "status": status,
+
+        "source": payload.get("source") or "per-device-real-qoe-probe",
+        "session_id": _v2_session_id(payload),
+        "device_id": payload.get("device_id") or payload.get("deviceId") or _v2_session_id(payload),
+        "device_name": payload.get("device_name") or payload.get("deviceName") or "unknown-device",
+        "device_type": payload.get("device_type") or payload.get("deviceType") or "unknown",
+        "browser": payload.get("browser") or "unknown",
+        "platform": payload.get("platform") or "unknown",
+        "network_type": payload.get("network_type") or payload.get("networkType") or "unknown",
+        "browser_downlink_mbps": _v2_float(payload.get("browser_downlink_mbps") or payload.get("downlink")),
+        "browser_rtt_ms": _v2_float(payload.get("browser_rtt_ms") or payload.get("rtt")),
+        "user_agent": payload.get("user_agent") or payload.get("userAgent") or "-",
+    }
+
+@app.post("/api/qoe/device-sample")
+async def qoe_device_sample_v2(payload: dict):
+    sample = _v2_normalize(payload)
+    qoe_device_samples_v2.appendleft(sample)
+
+    return {
+        "status": "saved",
+        "message": "Per-device QoE sample saved",
+        "session_id": sample["session_id"],
+        "device_name": sample["device_name"],
+        "network_type": sample["network_type"],
+        "sample": sample,
+    }
+
+@app.get("/api/qoe/device-history")
+def qoe_device_history_v2(
+    session_id: str = _QoeQuery(default=""),
+    limit: int = _QoeQuery(default=80)
+):
+    limit = max(1, min(int(limit), 300))
+    rows = list(qoe_device_samples_v2)
+
+    if session_id:
+        rows = [r for r in rows if r.get("session_id") == session_id]
+
+    return rows[:limit]
+
+@app.get("/api/qoe/device-metrics")
+def qoe_device_metrics_v2(session_id: str = _QoeQuery(default="")):
+    rows = list(qoe_device_samples_v2)
+
+    if session_id:
+        rows = [r for r in rows if r.get("session_id") == session_id]
+
+    if not rows:
+        return {
+            "throughput": 0,
+            "latency": 0,
+            "jitter": 0,
+            "packet_loss": 0,
+            "bandwidth": 0,
+            "qoe_score": 0,
+            "streaming_status": "WAITING",
+            "status": "WAITING",
+            "source": "waiting-for-current-device-session",
+            "timestamp": "-",
+            "session_id": session_id or "unknown-session",
+        }
+
+    latest = rows[0]
+    return latest
+
+@app.get("/api/qoe/device-alerts")
+def qoe_device_alerts_v2(session_id: str = _QoeQuery(default="")):
+    rows = list(qoe_device_samples_v2)
+
+    if session_id:
+        rows = [r for r in rows if r.get("session_id") == session_id]
+
+    if not rows:
+        return []
+
+    latest = rows[0]
+    alerts = []
+
+    qoe = _v2_float(latest.get("qoe_score"))
+    latency = _v2_float(latest.get("latency"))
+    jitter = _v2_float(latest.get("jitter"))
+    throughput = _v2_float(latest.get("throughput"))
+    loss = _v2_float(latest.get("packet_loss"))
+    t = latest.get("timestamp") or "-"
+
+    def add(level, message, metric, source):
+        alerts.append({
+            "id": int(_qoe_time.time() * 1000) + len(alerts),
+            "type": level,
+            "message": message,
+            "metric": metric,
+            "time": t,
+            "source": source,
+            "session_id": latest.get("session_id"),
+            "device_name": latest.get("device_name"),
+            "network_type": latest.get("network_type"),
+        })
+
+    if qoe < 60:
+        add("critical", "Poor QoE on Current Device", f"QoE {qoe:.1f}", "Per-Device QoE")
+    elif qoe < 75:
+        add("warning", "Buffer Risk on Current Device", f"QoE {qoe:.1f}", "Per-Device QoE")
+
+    if latency > 180:
+        add("critical", "Critical Latency on Current Device", f"{latency:.1f} ms", "Per-Device Probe")
+    elif latency > 100:
+        add("warning", "High Latency on Current Device", f"{latency:.1f} ms", "Per-Device Probe")
+
+    if jitter > 80:
+        add("critical", "Critical Jitter on Current Device", f"{jitter:.1f} ms", "Per-Device Probe")
+    elif jitter > 35:
+        add("warning", "High Jitter on Current Device", f"{jitter:.1f} ms", "Per-Device Probe")
+
+    if throughput < 3:
+        add("critical", "Very Low Throughput on Current Device", f"{throughput:.2f} Mbps", "Per-Device Download Probe")
+    elif throughput < 8:
+        add("warning", "Low Throughput on Current Device", f"{throughput:.2f} Mbps", "Per-Device Download Probe")
+
+    if loss >= 1:
+        add("critical", "Packet Loss on Current Device", f"{loss:.2f}%", "Per-Device Probe")
+
+    return alerts
+
+@app.get("/api/qoe/device-sessions")
+def qoe_device_sessions_v2():
+    sessions = {}
+
+    for row in list(qoe_device_samples_v2):
+        sid = row.get("session_id") or "unknown-session"
+        if sid not in sessions:
+            sessions[sid] = {
+                "session_id": sid,
+                "device_name": row.get("device_name"),
+                "device_type": row.get("device_type"),
+                "browser": row.get("browser"),
+                "platform": row.get("platform"),
+                "network_type": row.get("network_type"),
+                "latest_timestamp": row.get("timestamp"),
+                "sample_count": 0,
+            }
+        sessions[sid]["sample_count"] += 1
+
+    return {
+        "count": len(sessions),
+        "sessions": list(sessions.values()),
+    }

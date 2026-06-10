@@ -1,0 +1,155 @@
+"use client";
+
+import React, { useEffect, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  ArrowUpRight,
+  ArrowDownRight,
+  Activity,
+  Zap,
+  Network,
+  ShieldAlert
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+
+interface KpiData {
+  title: string;
+  value: string;
+  unit: string;
+  trend: number;
+  icon: React.ElementType;
+  status: "good" | "warning" | "critical";
+}
+
+export function KpiCards() {
+
+  const [metrics, setMetrics] = useState<KpiData[]>([]);
+
+  useEffect(() => {
+
+    const fetchMetrics = async () => {
+
+      try {
+
+        console.log("Starting fetch...");
+
+const response = await fetch(
+  `${process.env.NEXT_PUBLIC_API_URL}/api/qos/metrics`
+);
+
+console.log("Response status:", response.status);
+
+        const data = await response.json();
+
+        setMetrics([
+          {
+            title: "Avg Throughput",
+            value: data.throughput?.toString() || "0",
+            unit: "Mbps",
+            trend: 0,
+            icon: Zap,
+            status: "good"
+          },
+          {
+            title: "Network Latency",
+            value: data.latency?.toString() || "0",
+            unit: "ms",
+            trend: 0,
+            icon: Activity,
+            status: "good"
+          },
+          {
+            title: "Packet Loss",
+            value: data.packet_loss?.toString() || "0",
+            unit: "%",
+            trend: 0,
+            icon: ShieldAlert,
+            status: "warning"
+          },
+          {
+            title: "Jitter",
+            value: data.jitter?.toString() || "0",
+            unit: "ms",
+            trend: 0,
+            icon: Network,
+            status: "good"
+          }
+        ]);
+
+      } catch (error) {
+        console.error("FETCH ERROR");
+        console.error(error);
+      }
+
+    };
+
+    fetchMetrics();
+
+  }, []);
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {metrics.map((metric) => (
+        <Card key={metric.title} className="relative overflow-hidden group">
+          <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+
+          <CardContent className="p-6">
+            <div className="flex justify-between items-start">
+
+              <div>
+                <p className="text-sm font-medium text-slate-400 mb-1">
+                  {metric.title}
+                </p>
+
+                <div className="flex items-baseline gap-2">
+                  <h4 className="text-3xl font-bold tracking-tight text-white">
+                    {metric.value}
+                  </h4>
+
+                  <span className="text-sm text-slate-500">
+                    {metric.unit}
+                  </span>
+                </div>
+              </div>
+
+              <div
+                className={cn(
+                  "p-3 rounded-xl backdrop-blur-md border",
+                  metric.status === "good"
+                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                    : metric.status === "warning"
+                    ? "bg-amber-500/10 border-amber-500/20 text-amber-400"
+                    : "bg-red-500/10 border-red-500/20 text-red-400"
+                )}
+              >
+                <metric.icon className="h-5 w-5" />
+              </div>
+
+            </div>
+
+            <div className="mt-4 flex items-center text-sm">
+
+              <span className="flex items-center font-medium text-emerald-400">
+
+                {metric.trend > 0 ? (
+                  <ArrowUpRight className="h-4 w-4 mr-1" />
+                ) : (
+                  <ArrowDownRight className="h-4 w-4 mr-1" />
+                )}
+
+                {Math.abs(metric.trend)}%
+
+              </span>
+
+              <span className="text-slate-500 ml-2">
+                vs last hour
+              </span>
+
+            </div>
+
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}

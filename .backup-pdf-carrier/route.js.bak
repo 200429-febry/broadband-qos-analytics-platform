@@ -1,0 +1,390 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const runtime = "nodejs";
+
+const PDFDocument = require("pdfkit");
+
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.API_URL ||
+  "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+async function safeJson(url, fallback) {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return fallback;
+    return await res.json();
+  } catch {
+    return fallback;
+  }
+}
+
+function number(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function avg(items, key) {
+  if (!Array.isArray(items) || items.length === 0) return 0;
+  const values = items.map((x) => number(x?.[key])).filter((x) => Number.isFinite(x));
+  if (!values.length) return 0;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function max(items, key) {
+  if (!Array.isArray(items) || items.length === 0) return 0;
+  const values = items.map((x) => number(x?.[key])).filter((x) => Number.isFinite(x));
+  if (!values.length) return 0;
+  return Math.max(...values);
+}
+
+function min(items, key) {
+  if (!Array.isArray(items) || items.length === 0) return 0;
+  const values = items.map((x) => number(x?.[key])).filter((x) => Number.isFinite(x));
+  if (!values.length) return 0;
+  return Math.min(...values);
+}
+
+function fmt(value, digits = 2) {
+  return number(value).toFixed(digits);
+}
+
+function statusFromQoe(qoe) {
+  const x = number(qoe);
+  if (x >= 90) return "EXCELLENT";
+  if (x >= 75) return "STABLE";
+  if (x >= 60) return "BUFFER RISK";
+  return "POOR";
+}
+
+function severityText(alerts, metrics) {
+  if (Array.isArray(alerts) && alerts.length > 0) return "ATTENTION REQUIRED";
+  const qoe = number(metrics?.qoe_score);
+  if (qoe >= 90) return "SLA PASSED";
+  if (qoe >= 75) return "SLA WATCH";
+  return "SLA RISK";
+}
+
+function drawTitle(doc, title, subtitle) {
+  doc
+    .fontSize(20)
+    .fillColor("#0f172a")
+    .text(title, { align: "left" });
+
+  doc.moveDown(0.25);
+
+  doc
+    .fontSize(9)
+    .fillColor("#475569")
+    .text(subtitle, { align: "left" });
+
+  doc.moveDown(1);
+}
+
+function drawSection(doc, title) {
+  doc.moveDown(0.9);
+  doc
+    .fontSize(12)
+    .fillColor("#0f172a")
+    .text(title, { underline: false });
+
+  doc
+    .moveTo(doc.x, doc.y + 3)
+    .lineTo(560, doc.y + 3)
+    .strokeColor("#cbd5e1")
+    .lineWidth(0.5)
+    .stroke();
+
+  doc.moveDown(0.7);
+}
+
+function drawKeyValueGrid(doc, rows) {
+  const startX = doc.x;
+  let y = doc.y;
+  const colW = 255;
+  const rowH = 34;
+
+  rows.forEach((row, index) => {
+    const col = index % 2;
+    if (index > 0 && col === 0) y += rowH + 6;
+
+    const x = startX + col * (colW + 12);
+
+    doc
+      .roundedRect(x, y, colW, rowH, 6)
+      .fillAndStroke("#f8fafc", "#dbeafe");
+
+    doc
+      .fontSize(7)
+      .fillColor("#64748b")
+      .text(row.label, x + 10, y + 7, { width: colW - 20 });
+
+    doc
+      .fontSize(11)
+      .fillColor("#0f172a")
+      .text(row.value, x + 10, y + 18, { width: colW - 20 });
+  });
+
+  doc.y = y + rowH + 8;
+}
+
+function drawTable(doc, headers, rows, options = {}) {
+  const startX = doc.x;
+  let y = doc.y;
+  const widths = options.widths || headers.map(() => Math.floor(520 / headers.length));
+  const rowH = options.rowHeight || 22;
+
+  function drawHeader() {
+    let x = startX;
+    doc.fontSize(7).fillColor("#ffffff");
+
+    headers.forEach((h, i) => {
+      doc.rect(x, y, widths[i], rowH).fillAndStroke("#0f172a", "#0f172a");
+      doc.fillColor("#ffffff").text(h, x + 4, y + 7, { width: widths[i] - 8 });
+      x += widths[i];
+    });
+
+    y += rowH;
+  }
+
+  drawHeader();
+
+  rows.forEach((row, rowIndex) => {
+    if (y > 745) {
+      doc.addPage();
+      y = 50;
+      drawHeader();
+    }
+
+    let x = startX;
+    const bg = rowIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
+
+    row.forEach((cell, i) => {
+      doc.rect(x, y, widths[i], rowH).fillAndStroke(bg, "#e2e8f0");
+      doc
+        .fontSize(7)
+        .fillColor("#0f172a")
+        .text(String(cell ?? ""), x + 4, y + 7, { width: widths[i] - 8 });
+      x += widths[i];
+    });
+
+    y += rowH;
+  });
+
+  doc.y = y + 8;
+}
+
+function addFooter(doc) {
+  const range = doc.bufferedPageRange();
+
+  for (let i = range.start; i < range.start + range.count; i++) {
+    doc.switchToPage(i);
+
+    doc
+      .fontSize(7)
+      .fillColor("#64748b")
+      .text(
+        `AKSARA UNION QoS Analytics Platform - Technical Report | Page ${i + 1} of ${range.count}`,
+        36,
+        810,
+        { align: "center", width: 523 }
+      );
+  }
+}
+
+export async function GET() {
+  const generatedAt = new Date();
+
+  const [metrics, history, alerts, qoeLatest] = await Promise.all([
+    safeJson(`${API_URL}/api/qos/metrics?x=${Date.now()}`, {}),
+    safeJson(`${API_URL}/api/qos/history?x=${Date.now()}`, []),
+    safeJson(`${API_URL}/api/alerts?x=${Date.now()}`, []),
+    safeJson(`${API_URL}/api/qoe/latest?x=${Date.now()}`, {}),
+  ]);
+
+  const samples = Array.isArray(history) ? history.slice(0, 20) : [];
+  const alertRows = Array.isArray(alerts) ? alerts : [];
+
+  const summary = {
+    sampleCount: samples.length,
+    avgThroughput: avg(samples, "throughput"),
+    avgLatency: avg(samples, "latency"),
+    avgJitter: avg(samples, "jitter"),
+    avgPacketLoss: avg(samples, "packet_loss"),
+    avgQoe: avg(samples, "qoe_score"),
+    maxLatency: max(samples, "latency"),
+    minThroughput: min(samples, "throughput"),
+    currentStatus: metrics?.streaming_status || statusFromQoe(metrics?.qoe_score),
+    severity: severityText(alertRows, metrics),
+  };
+
+  const doc = new PDFDocument({
+    size: "A4",
+    margin: 36,
+    bufferPages: true,
+    info: {
+      Title: "AKSARA UNION QoS Technical Report",
+      Author: "AKSARA UNION QoS Analytics Platform",
+      Subject: "Real Browser-to-Cloud QoE Telemetry Report",
+    },
+  });
+
+  const chunks = [];
+  doc.on("data", (chunk) => chunks.push(chunk));
+  const done = new Promise((resolve) => doc.on("end", resolve));
+
+  doc
+    .rect(0, 0, 595, 80)
+    .fill("#020617");
+
+  doc
+    .fontSize(9)
+    .fillColor("#67e8f9")
+    .text("AKSARA UNION", 36, 24);
+
+  doc
+    .fontSize(22)
+    .fillColor("#ffffff")
+    .text("QoS / QoE Technical SLA Report", 36, 38);
+
+  doc
+    .fontSize(8)
+    .fillColor("#cbd5e1")
+    .text("Server-side structured report. This PDF is generated from real telemetry data, not from a screenshot.", 36, 64);
+
+  doc.y = 105;
+
+  drawTitle(
+    doc,
+    "Executive Summary",
+    "This report summarizes real browser-to-Cloud Run QoE measurements, including throughput, latency, jitter, packet loss, QoE score, and active threshold alerts."
+  );
+
+  drawKeyValueGrid(doc, [
+    { label: "Generated At", value: generatedAt.toLocaleString("en-US") },
+    { label: "Data Source", value: metrics?.source || "real-qoe-probe" },
+    { label: "Current QoE Score", value: `${fmt(metrics?.qoe_score, 1)} / 100` },
+    { label: "Current Status", value: summary.currentStatus },
+    { label: "SLA Classification", value: summary.severity },
+    { label: "Active Alerts", value: `${alertRows.length}` },
+    { label: "Telemetry Samples", value: `${summary.sampleCount}` },
+    { label: "Latest Timestamp", value: metrics?.timestamp || "-" },
+  ]);
+
+  drawSection(doc, "Live Telemetry Snapshot");
+
+  drawKeyValueGrid(doc, [
+    { label: "Current Throughput", value: `${fmt(metrics?.throughput, 2)} Mbps` },
+    { label: "Current Latency", value: `${fmt(metrics?.latency, 2)} ms` },
+    { label: "Current Jitter", value: `${fmt(metrics?.jitter, 2)} ms` },
+    { label: "Packet Loss", value: `${fmt(metrics?.packet_loss, 2)} %` },
+    { label: "Bandwidth Field", value: `${fmt(metrics?.bandwidth ?? metrics?.throughput, 2)} Mbps` },
+    { label: "Streaming Status", value: metrics?.streaming_status || "-" },
+  ]);
+
+  drawSection(doc, "Measurement Window Statistics");
+
+  drawKeyValueGrid(doc, [
+    { label: "Average Throughput", value: `${fmt(summary.avgThroughput, 2)} Mbps` },
+    { label: "Minimum Throughput", value: `${fmt(summary.minThroughput, 2)} Mbps` },
+    { label: "Average Latency", value: `${fmt(summary.avgLatency, 2)} ms` },
+    { label: "Maximum Latency", value: `${fmt(summary.maxLatency, 2)} ms` },
+    { label: "Average Jitter", value: `${fmt(summary.avgJitter, 2)} ms` },
+    { label: "Average Packet Loss", value: `${fmt(summary.avgPacketLoss, 2)} %` },
+    { label: "Average QoE Score", value: `${fmt(summary.avgQoe, 2)} / 100` },
+    { label: "Raw QoE Buffer Count", value: `${qoeLatest?.count ?? "-"}` },
+  ]);
+
+  drawSection(doc, "Active Alerts and Fault Conditions");
+
+  if (alertRows.length > 0) {
+    drawTable(
+      doc,
+      ["Type", "Message", "Metric", "Time", "Source"],
+      alertRows.slice(0, 10).map((a) => [
+        a.type || "-",
+        a.message || "-",
+        a.metric || "-",
+        a.time || "-",
+        a.source || "-",
+      ]),
+      { widths: [55, 180, 80, 80, 125], rowHeight: 24 }
+    );
+  } else {
+    doc
+      .fontSize(9)
+      .fillColor("#166534")
+      .text("No active alerts. Current telemetry is within the configured operating threshold.");
+  }
+
+  drawSection(doc, "Latest Real Telemetry Samples");
+
+  if (samples.length > 0) {
+    drawTable(
+      doc,
+      ["Timestamp", "Throughput", "Latency", "Jitter", "Loss", "QoE", "Source"],
+      samples.slice(0, 15).map((s) => [
+        s.timestamp || "-",
+        `${fmt(s.throughput, 2)} Mbps`,
+        `${fmt(s.latency, 2)} ms`,
+        `${fmt(s.jitter, 2)} ms`,
+        `${fmt(s.packet_loss, 2)} %`,
+        `${fmt(s.qoe_score, 1)}`,
+        s.source || "-",
+      ]),
+      { widths: [75, 82, 72, 70, 58, 50, 113], rowHeight: 23 }
+    );
+  } else {
+    doc
+      .fontSize(9)
+      .fillColor("#b45309")
+      .text("No telemetry samples are currently available. Open Streaming QoE or keep the dashboard active to feed the real browser-to-cloud probe.");
+  }
+
+  drawSection(doc, "Engineering Interpretation");
+
+  const interpretation = [
+    `The telemetry source is ${metrics?.source || "real-qoe-probe"}, meaning the data is generated from active browser-side probing toward the Cloud Run backend.`,
+    `Current throughput is ${fmt(metrics?.throughput, 2)} Mbps with latency ${fmt(metrics?.latency, 2)} ms and jitter ${fmt(metrics?.jitter, 2)} ms.`,
+    `The current QoE score is ${fmt(metrics?.qoe_score, 1)} and the interpreted streaming condition is ${metrics?.streaming_status || summary.currentStatus}.`,
+    alertRows.length > 0
+      ? `There are ${alertRows.length} active alert(s), so the platform classifies the condition as requiring engineering attention.`
+      : "No active alert is present, so the platform currently considers the streaming condition operational.",
+  ];
+
+  doc
+    .fontSize(9)
+    .fillColor("#0f172a")
+    .list(interpretation, {
+      bulletRadius: 2,
+      textIndent: 12,
+      bulletIndent: 4,
+      lineGap: 4,
+    });
+
+  drawSection(doc, "Methodology and Export Integrity");
+
+  doc
+    .fontSize(9)
+    .fillColor("#0f172a")
+    .text(
+      "This report is generated server-side using structured telemetry endpoints. It does not capture the browser screen, does not include floating UI widgets, and does not depend on the visual layout of the dashboard. The exported PDF and CSV should therefore remain stable even when the dashboard UI changes.",
+      { lineGap: 4 }
+    );
+
+  addFooter(doc);
+  doc.end();
+
+  await done;
+
+  const pdfBuffer = Buffer.concat(chunks);
+
+  return new Response(pdfBuffer, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="AKSARA_QoS_Technical_Report_${generatedAt.toISOString().slice(0, 10)}.pdf"`,
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+    },
+  });
+}

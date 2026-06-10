@@ -1,0 +1,174 @@
+"use client";
+
+import { useEffect } from "react";
+
+declare global {
+  interface Window {
+    __AKSARA_DEVICE_SESSION__?: string;
+    __AKSARA_DEVICE_INFO__?: Record<string, any>;
+  }
+}
+
+function uuid() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function getDeviceType() {
+  const ua = navigator.userAgent || "";
+  if (/android/i.test(ua)) return "android-phone";
+  if (/iphone/i.test(ua)) return "iphone";
+  if (/ipad/i.test(ua)) return "ipad";
+  if (/mobile/i.test(ua)) return "mobile";
+  return "desktop";
+}
+
+function getBrowserName() {
+  const ua = navigator.userAgent || "";
+  if (ua.includes("Edg/")) return "Edge";
+  if (ua.includes("Chrome/")) return "Chrome";
+  if (ua.includes("Firefox/")) return "Firefox";
+  if (ua.includes("Safari/") && !ua.includes("Chrome/")) return "Safari";
+  return "Browser";
+}
+
+function getConnectionInfo() {
+  const c =
+    (navigator as any).connection ||
+    (navigator as any).mozConnection ||
+    (navigator as any).webkitConnection;
+
+  return {
+    effectiveType: c?.effectiveType || "unknown",
+    downlink: c?.downlink || 0,
+    rtt: c?.rtt || 0,
+    saveData: Boolean(c?.saveData),
+  };
+}
+
+function ensureSession() {
+  let sid = localStorage.getItem("aksara-device-session-id");
+
+  if (!sid) {
+    sid = `${getDeviceType()}-${uuid()}`;
+    localStorage.setItem("aksara-device-session-id", sid);
+  }
+
+  const connection = getConnectionInfo();
+
+  const info = {
+    session_id: sid,
+    device_id: sid,
+    device_name: `${getDeviceType()}-${getBrowserName()}`,
+    device_type: getDeviceType(),
+    browser: getBrowserName(),
+    platform: navigator.platform || "unknown",
+    network_type: connection.effectiveType,
+    browser_downlink_mbps: connection.downlink,
+    browser_rtt_ms: connection.rtt,
+    save_data: connection.saveData,
+    user_agent: navigator.userAgent || "unknown",
+  };
+
+  window.__AKSARA_DEVICE_SESSION__ = sid;
+  window.__AKSARA_DEVICE_INFO__ = info;
+
+  return info;
+}
+
+function appendSessionToUrl(input: RequestInfo | URL) {
+  const info = ensureSession();
+
+  if (typeof input !== "string") return input;
+
+  const targets = [
+    "/api/qos-history",
+    "/api/qos-metrics",
+    "/api/qos-alerts",
+    "/api/reports/pdf",
+    "/api/reports/csv",
+  ];
+
+  if (!targets.some((t) => input.includes(t))) return input;
+  if (input.includes("session_id=")) return input;
+
+  const join = input.includes("?") ? "&" : "?";
+  return `${input}${join}session_id=${encodeURIComponent(info.session_id)}`;
+}
+
+function patchFetch() {
+  if ((window as any).__AKSARA_FETCH_PATCHED__) return;
+  (window as any).__AKSARA_FETCH_PATCHED__ = true;
+
+  const originalFetch = window.fetch.bind(window);
+
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const info = ensureSession();
+
+    let nextInput = appendSessionToUrl(input);
+    let nextInit = init ? { ...init } : undefined;
+
+    const urlText =
+      typeof nextInput === "string"
+        ? nextInput
+        : nextInput instanceof URL
+          ? nextInput.toString()
+          : "";
+
+    const isSamplePost = urlText.includes("/api/qoe/sample");
+
+    if (isSamplePost && nextInit?.body && typeof nextInit.body === "string") {
+      try {
+        const body = JSON.parse(nextInit.body);
+
+        nextInit.body = JSON.stringify({
+          ...body,
+          ...info,
+          client_timestamp: Date.now(),
+          source: "per-device-real-qoe-probe",
+        });
+
+        nextInit.headers = {
+          ...(nextInit.headers || {}),
+          "Content-Type": "application/json",
+        };
+      } catch {
+        // keep original body
+      }
+    }
+
+    return originalFetch(nextInput, nextInit);
+  };
+}
+
+export function DeviceSessionController() {
+  useEffect(() => {
+    ensureSession();
+    patchFetch();
+
+    const refresh = () => ensureSession();
+
+    window.addEventListener("online", refresh);
+    window.addEventListener("offline", refresh);
+
+    const interval = setInterval(() => {
+      const info = ensureSession();
+      window.dispatchEvent(
+        new CustomEvent("aksara-device-session-refresh", {
+          detail: info,
+        })
+      );
+    }, 5000);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("offline", refresh);
+    };
+  }, []);
+
+  return null;
+}

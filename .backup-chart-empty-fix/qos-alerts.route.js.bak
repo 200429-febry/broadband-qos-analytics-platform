@@ -1,0 +1,28 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const runtime = "nodejs";
+
+const API_URL = "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+export async function GET(req) {
+  const url = new URL(req.url);
+  const sessionId = url.searchParams.get("session_id") || "";
+
+  if (!sessionId) {
+    return Response.json([], {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+  const endpoint =
+    API_URL +
+    "/api/qoe/device-alerts?session_id=" +
+    encodeURIComponent(sessionId);
+
+  const res = await fetch(endpoint, { cache: "no-store" });
+  const data = await res.json();
+
+  return Response.json(Array.isArray(data) ? data : [], {
+    headers: { "Cache-Control": "no-store" },
+  });
+}

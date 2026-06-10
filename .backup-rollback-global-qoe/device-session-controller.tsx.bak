@@ -1,0 +1,199 @@
+"use client";
+
+import { useEffect } from "react";
+
+const API_URL = "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+declare global {
+  interface Window {
+    __AKSARA_DEVICE_SESSION__?: string;
+    __AKSARA_DEVICE_INFO__?: Record<string, any>;
+    __AKSARA_FETCH_PATCHED_V2__?: boolean;
+  }
+}
+
+function makeId() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function detectDeviceType() {
+  const ua = navigator.userAgent || "";
+  if (/android/i.test(ua)) return "android-phone";
+  if (/iphone/i.test(ua)) return "iphone";
+  if (/ipad/i.test(ua)) return "ipad";
+  if (/mobile/i.test(ua)) return "mobile";
+  return "desktop";
+}
+
+function detectBrowser() {
+  const ua = navigator.userAgent || "";
+  if (ua.includes("Edg/")) return "Edge";
+  if (ua.includes("OPR/")) return "Opera";
+  if (ua.includes("Chrome/")) return "Chrome";
+  if (ua.includes("Firefox/")) return "Firefox";
+  if (ua.includes("Safari/") && !ua.includes("Chrome/")) return "Safari";
+  return "Browser";
+}
+
+function connectionInfo() {
+  const nav = navigator as any;
+  const c = nav.connection || nav.mozConnection || nav.webkitConnection;
+
+  return {
+    network_type: c?.effectiveType || "unknown",
+    browser_downlink_mbps: Number(c?.downlink || 0),
+    browser_rtt_ms: Number(c?.rtt || 0),
+    save_data: Boolean(c?.saveData),
+  };
+}
+
+function ensureDeviceSession() {
+  let sid = localStorage.getItem("aksara-device-session-id-v2");
+
+  if (!sid) {
+    sid = `${detectDeviceType()}-${makeId()}`;
+    localStorage.setItem("aksara-device-session-id-v2", sid);
+  }
+
+  const conn = connectionInfo();
+
+  const info = {
+    session_id: sid,
+    client_session_id: sid,
+    device_id: sid,
+    device_name: `${detectDeviceType()}-${detectBrowser()}`,
+    device_type: detectDeviceType(),
+    browser: detectBrowser(),
+    platform: navigator.platform || "unknown",
+    user_agent: navigator.userAgent || "-",
+    ...conn,
+  };
+
+  window.__AKSARA_DEVICE_SESSION__ = sid;
+  window.__AKSARA_DEVICE_INFO__ = info;
+
+  document.documentElement.setAttribute("data-aksara-session-id", sid);
+  document.documentElement.setAttribute("data-aksara-device-name", info.device_name);
+  document.documentElement.setAttribute("data-aksara-network-type", info.network_type);
+
+  return info;
+}
+
+function withSession(url: string, sessionId: string) {
+  if (url.includes("session_id=")) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}session_id=${encodeURIComponent(sessionId)}`;
+}
+
+function normalizeUrl(input: RequestInfo | URL) {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  if (input instanceof Request) return input.url;
+  return String(input);
+}
+
+function rerouteTelemetryUrl(inputUrl: string, sessionId: string) {
+  let url = inputUrl;
+
+  if (url.includes("/api/qoe/sample")) {
+    if (url.startsWith("http")) {
+      return url.replace("/api/qoe/sample", "/api/qoe/device-sample");
+    }
+    return `${API_URL}/api/qoe/device-sample`;
+  }
+
+  if (url.includes("/api/qos/history")) {
+    return withSession(`${window.location.origin}/api/qos-history`, sessionId);
+  }
+
+  if (url.includes("/api/qos/metrics")) {
+    return withSession(`${window.location.origin}/api/qos-metrics`, sessionId);
+  }
+
+  if (url.includes("/api/alerts")) {
+    return withSession(`${window.location.origin}/api/qos-alerts`, sessionId);
+  }
+
+  if (url.includes("/api/qoe/latest")) {
+    return withSession(`${window.location.origin}/api/qos-history`, sessionId);
+  }
+
+  if (url.includes("/api/qos-history") || url.includes("/api/qos-metrics") || url.includes("/api/qos-alerts")) {
+    return withSession(url, sessionId);
+  }
+
+  return url;
+}
+
+function patchFetch() {
+  if (window.__AKSARA_FETCH_PATCHED_V2__) return;
+  window.__AKSARA_FETCH_PATCHED_V2__ = true;
+
+  const originalFetch = window.fetch.bind(window);
+
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const info = ensureDeviceSession();
+    const originalUrl = normalizeUrl(input);
+    const nextUrl = rerouteTelemetryUrl(originalUrl, info.session_id);
+
+    let nextInit: RequestInit = init ? { ...init } : {};
+
+    const headers = new Headers(nextInit.headers || {});
+    headers.set("x-aksara-session-id", info.session_id);
+    headers.set("x-aksara-device-name", info.device_name);
+    nextInit.headers = headers;
+
+    const isSamplePost = nextUrl.includes("/api/qoe/device-sample");
+
+    if (isSamplePost) {
+      let bodyObject: any = {};
+
+      if (nextInit.body && typeof nextInit.body === "string") {
+        try {
+          bodyObject = JSON.parse(nextInit.body);
+        } catch {
+          bodyObject = {};
+        }
+      }
+
+      const now = new Date();
+
+      nextInit.method = "POST";
+      headers.set("Content-Type", "application/json");
+      nextInit.headers = headers;
+
+      nextInit.body = JSON.stringify({
+        ...bodyObject,
+        ...info,
+        timestamp_epoch: Date.now(),
+        time: now.toLocaleTimeString(),
+        source: "per-device-real-qoe-probe",
+      });
+    }
+
+    return originalFetch(nextUrl, nextInit);
+  };
+}
+
+export function DeviceSessionController() {
+  useEffect(() => {
+    ensureDeviceSession();
+    patchFetch();
+
+    const interval = setInterval(() => {
+      const info = ensureDeviceSession();
+      window.dispatchEvent(
+        new CustomEvent("aksara-device-session-refresh", {
+          detail: info,
+        })
+      );
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return null;
+}

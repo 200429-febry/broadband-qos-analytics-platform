@@ -1,0 +1,126 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Sample = {
+  time: string;
+  latency: number;
+  jitter: number;
+  downloadMbps: number;
+  uploadMbps: number;
+  backendMs: number;
+  qoeScore: number;
+  status: string;
+};
+
+function Card({ label, value, unit }: { label: string; value: string | number; unit?: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-950 p-5">
+      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{label}</p>
+      <div className="mt-3 flex items-end gap-2">
+        <span className="text-3xl font-black text-white">{value}</span>
+        {unit ? <span className="mb-1 text-sm text-slate-400">{unit}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+export default function StreamPage() {
+  const [samples, setSamples] = useState<Sample[]>([]);
+
+  const fetchSamples = async () => {
+    const res = await fetch(`/api/qoe-latest?x=${Date.now()}`, { cache: "no-store" });
+    const data = await res.json();
+    setSamples(Array.isArray(data.samples) ? data.samples : []);
+  };
+
+  useEffect(() => {
+    fetchSamples();
+    const interval = setInterval(fetchSamples, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const latest = samples[0];
+
+  const avg = useMemo(() => {
+    if (!samples.length) return { latency: 0, jitter: 0, down: 0, up: 0, qoe: 0 };
+    const sum = samples.reduce(
+      (a, s) => ({
+        latency: a.latency + Number(s.latency || 0),
+        jitter: a.jitter + Number(s.jitter || 0),
+        down: a.down + Number(s.downloadMbps || 0),
+        up: a.up + Number(s.uploadMbps || 0),
+        qoe: a.qoe + Number(s.qoeScore || 0),
+      }),
+      { latency: 0, jitter: 0, down: 0, up: 0, qoe: 0 }
+    );
+    const n = samples.length;
+    return {
+      latency: +(sum.latency / n).toFixed(1),
+      jitter: +(sum.jitter / n).toFixed(1),
+      down: +(sum.down / n).toFixed(2),
+      up: +(sum.up / n).toFixed(2),
+      qoe: Math.round(sum.qoe / n),
+    };
+  }, [samples]);
+
+  return (
+    <main className="space-y-8 p-6 text-white">
+      <div>
+        <h1 className="text-3xl font-black">Streaming Infrastructure Monitor</h1>
+        <p className="mt-2 text-slate-400">HLS / WebRTC-style streaming health derived from real browser-side QoE telemetry. Last telemetry refresh: {latest?.time || "-"}</p>
+      </div>
+
+      <section className="rounded-3xl border border-cyan-500/30 bg-slate-900/70 p-6">
+        <h2 className="mb-5 text-xl font-black">Client Device Diagnostics</h2>
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card label="Logical CPU Cores" value={typeof navigator !== "undefined" ? navigator.hardwareConcurrency || "-" : "-"} />
+          <Card label="Browser" value="Chrome" />
+          <Card label="Real Downlink" value={latest?.downloadMbps ?? 0} unit="Mbps" />
+          <Card label="QoE Score" value={latest?.qoeScore ?? 0} />
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+        <h2 className="mb-5 text-xl font-black">Streaming Health Summary</h2>
+        <div className="grid gap-4 md:grid-cols-5">
+          <Card label="Active Samples" value={samples.length} />
+          <Card label="Avg Latency" value={avg.latency} unit="ms" />
+          <Card label="Avg Jitter" value={avg.jitter} unit="ms" />
+          <Card label="Avg Download" value={avg.down} unit="Mbps" />
+          <Card label="Status" value={latest?.status || "WAITING"} />
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+        <h2 className="text-xl font-black">Recent Streaming Probe Samples</h2>
+        <div className="mt-5 overflow-hidden rounded-2xl border border-slate-800">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-950 text-xs uppercase tracking-[0.2em] text-slate-500">
+              <tr>
+                <th className="p-3">Time</th>
+                <th className="p-3">QoE</th>
+                <th className="p-3">Latency</th>
+                <th className="p-3">Down</th>
+                <th className="p-3">Up</th>
+                <th className="p-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {samples.slice(0, 12).map((s, i) => (
+                <tr key={i} className="border-t border-slate-800">
+                  <td className="p-3 text-slate-400">{s.time}</td>
+                  <td className="p-3 text-cyan-300">{s.qoeScore}</td>
+                  <td className="p-3">{s.latency} ms</td>
+                  <td className="p-3">{s.downloadMbps} Mbps</td>
+                  <td className="p-3">{s.uploadMbps} Mbps</td>
+                  <td className="p-3 font-bold text-emerald-300">{s.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  );
+}

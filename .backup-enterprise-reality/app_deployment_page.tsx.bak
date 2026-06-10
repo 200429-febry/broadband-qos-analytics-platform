@@ -1,0 +1,257 @@
+"use client";
+
+import {
+  Rocket,
+  Cloud,
+  Database,
+  Server,
+  ShieldCheck,
+  Container,
+  CheckCircle2,
+  AlertTriangle,
+  KeyRound,
+} from "lucide-react";
+
+const checklist = [
+  {
+    title: "Frontend Container",
+    status: "Ready",
+    detail: "Next.js frontend sudah berjalan di Docker dan siap dipindah ke Cloud Run.",
+    icon: Container,
+  },
+  {
+    title: "FastAPI Backend",
+    status: "Ready",
+    detail: "API service sudah expose health, metrics, QoS, ML, coverage, dan auth endpoint.",
+    icon: Server,
+  },
+  {
+    title: "PostgreSQL Database",
+    status: "Cloud SQL Target",
+    detail: "Database lokal akan dimigrasikan ke Cloud SQL PostgreSQL.",
+    icon: Database,
+  },
+  {
+    title: "Environment Variables",
+    status: "Need GCP Secrets",
+    detail: "DATABASE_URL, JWT_SECRET, dan ML_SERVICE_URL perlu dipindah ke Secret Manager.",
+    icon: KeyRound,
+  },
+  {
+    title: "Observability",
+    status: "Ready",
+    detail: "Prometheus dan Grafana sudah aktif secara lokal, nanti bisa mapping ke Cloud Monitoring.",
+    icon: ShieldCheck,
+  },
+  {
+    title: "HTTPS Requirement",
+    status: "Required",
+    detail: "GPS Locate Me butuh HTTPS saat production. Cloud Run sudah support HTTPS default.",
+    icon: Cloud,
+  },
+];
+
+export default function DeploymentPage() {
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div>
+        <h1 className="text-2xl font-bold text-white">
+          GCP Deployment Readiness
+        </h1>
+
+        <p className="text-slate-400">
+          Production migration checklist from local Docker Compose to Google
+          Cloud Run, Cloud SQL, Artifact Registry, and cloud observability.
+        </p>
+      </div>
+
+      <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-6">
+        <div className="flex items-start gap-4">
+          <Rocket className="h-10 w-10 text-emerald-400" />
+
+          <div>
+            <h2 className="text-2xl font-bold text-emerald-300">
+              Local Platform is GCP-Ready
+            </h2>
+
+            <p className="mt-2 text-slate-300">
+              Current architecture already follows containerized deployment:
+              frontend, API, ML service, database, monitoring, and observability
+              are separated into independent services.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <DeployTarget
+          title="Cloud Run"
+          subtitle="Frontend + API + ML Service"
+          items={[
+            "Next.js frontend container",
+            "FastAPI backend container",
+            "ML inference service container",
+            "Autoscaling HTTP services",
+          ]}
+        />
+
+        <DeployTarget
+          title="Cloud SQL"
+          subtitle="PostgreSQL Managed Database"
+          items={[
+            "qos_db migration",
+            "users table",
+            "qosmetrics table",
+            "secure database connection",
+          ]}
+        />
+
+        <DeployTarget
+          title="Artifact Registry"
+          subtitle="Container Image Registry"
+          items={[
+            "frontend image",
+            "api image",
+            "ml-service image",
+            "versioned deployments",
+          ]}
+        />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        {checklist.map((item) => {
+          const Icon = item.icon;
+          const ready = item.status === "Ready";
+
+          return (
+            <div
+              key={item.title}
+              className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <Icon className="h-6 w-6 text-cyan-400" />
+
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    ready
+                      ? "bg-emerald-500/10 text-emerald-300"
+                      : "bg-amber-500/10 text-amber-300"
+                  }`}
+                >
+                  {item.status}
+                </span>
+              </div>
+
+              <h3 className="text-lg font-bold text-white">
+                {item.title}
+              </h3>
+
+              <p className="mt-2 text-sm text-slate-400">
+                {item.detail}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <h2 className="mb-5 text-xl font-semibold text-white">
+          Deployment Command Plan
+        </h2>
+
+        <div className="space-y-4">
+          <CommandBlock
+            title="1. Authenticate GCP"
+            command="gcloud auth login && gcloud config set project YOUR_PROJECT_ID"
+          />
+
+          <CommandBlock
+            title="2. Enable Services"
+            command="gcloud services enable run.googleapis.com sqladmin.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com"
+          />
+
+          <CommandBlock
+            title="3. Build Container Images"
+            command="gcloud builds submit --tag asia-southeast2-docker.pkg.dev/YOUR_PROJECT_ID/qos-platform/frontend"
+          />
+
+          <CommandBlock
+            title="4. Deploy to Cloud Run"
+            command="gcloud run deploy qos-frontend --image IMAGE_URL --region asia-southeast2 --allow-unauthenticated"
+          />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6">
+        <div className="flex gap-4">
+          <AlertTriangle className="h-6 w-6 text-amber-400" />
+
+          <div>
+            <h3 className="font-semibold text-amber-300">
+              Before real GCP deployment
+            </h3>
+
+            <p className="mt-2 text-sm text-slate-300">
+              Pastikan billing aman, region tetap asia-southeast2, Cloud SQL
+              activation policy bisa dihentikan setelah demo, dan semua secret
+              tidak ditaruh hardcoded di source code.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeployTarget({
+  title,
+  subtitle,
+  items,
+}: {
+  title: string;
+  subtitle: string;
+  items: string[];
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+      <Cloud className="mb-4 h-7 w-7 text-emerald-400" />
+
+      <h2 className="text-xl font-bold text-white">
+        {title}
+      </h2>
+
+      <p className="mb-4 text-sm text-slate-400">
+        {subtitle}
+      </p>
+
+      <div className="space-y-2">
+        {items.map((item) => (
+          <div key={item} className="flex items-center gap-2 text-sm">
+            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+            <span className="text-slate-300">{item}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CommandBlock({
+  title,
+  command,
+}: {
+  title: string;
+  command: string;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+      <p className="mb-2 text-sm font-semibold text-white">
+        {title}
+      </p>
+
+      <code className="block overflow-x-auto text-sm text-emerald-300">
+        {command}
+      </code>
+    </div>
+  );
+}

@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.venv/
+venv/
+backend/venv/
+backend/venv/**
+ml-service/venv/
+ml-service/venv/**
+__pycache__/
+**/__pycache__/**
+*.pyc
+.git/

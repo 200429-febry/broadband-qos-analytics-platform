@@ -1,0 +1,37 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const runtime = "nodejs";
+
+const API_URL = "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+export async function GET(req) {
+  const url = new URL(req.url);
+  const sessionId = url.searchParams.get("session_id") || "";
+
+  if (!sessionId) {
+    return Response.json({
+      throughput: 0,
+      latency: 0,
+      jitter: 0,
+      packet_loss: 0,
+      qoe_score: 0,
+      streaming_status: "WAITING",
+      source: "no-device-session",
+      timestamp: "-",
+    }, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+  const endpoint =
+    API_URL +
+    "/api/qoe/device-metrics?session_id=" +
+    encodeURIComponent(sessionId);
+
+  const res = await fetch(endpoint, { cache: "no-store" });
+  const data = await res.json();
+
+  return Response.json(data || {}, {
+    headers: { "Cache-Control": "no-store" },
+  });
+}

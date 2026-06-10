@@ -1,0 +1,430 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  Settings,
+  Monitor,
+  Save,
+  RotateCcw,
+  Server,
+  Database,
+  BrainCircuit,
+  Gauge,
+  ShieldCheck,
+} from "lucide-react";
+
+const API_URL = "https://qos-api-gh3tn2a6oa-et.a.run.app";
+
+type AppSettings = {
+  themeMode: string;
+  fontSize: string;
+  sidebarMode: string;
+  uiDensity: string;
+  refreshRate: string;
+  chartWindow: string;
+  mapRadius: string;
+  telemetryMode: string;
+  predictionSensitivity: string;
+};
+
+const DEFAULT_SETTINGS: AppSettings = {
+  themeMode: "Dark",
+  fontSize: "Large",
+  sidebarMode: "Expanded",
+  uiDensity: "Comfortable",
+  refreshRate: "5s",
+  chartWindow: "15 minutes",
+  mapRadius: "10 km",
+  telemetryMode: "Live API",
+  predictionSensitivity: "Balanced",
+};
+
+export default function SettingsPage() {
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [message, setMessage] = useState("");
+  const [health, setHealth] = useState<any>(null);
+  const [loadingHealth, setLoadingHealth] = useState(false);
+
+  const deploymentInfo = useMemo(() => {
+    if (typeof window === "undefined") {
+      return {
+        frontend: "Unknown",
+        environment: "Unknown",
+      };
+    }
+
+    const host = window.location.hostname;
+
+    return {
+      frontend: host,
+      environment: host.includes("run.app")
+        ? "Google Cloud Run"
+        : host.includes("localhost")
+        ? "Local Development"
+        : "Custom Deployment",
+    };
+  }, []);
+
+  const updateSetting = (key: keyof AppSettings, value: string) => {
+    setSettings((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const saveSettings = () => {
+    Object.entries(settings).forEach(([key, value]) => {
+      localStorage.setItem(key, value);
+    });
+
+    localStorage.setItem("themeMode", settings.themeMode);
+    localStorage.setItem("fontSize", settings.fontSize);
+    localStorage.setItem("sidebarMode", settings.sidebarMode);
+    localStorage.setItem("uiDensity", settings.uiDensity);
+    localStorage.setItem("refreshRate", settings.refreshRate);
+    localStorage.setItem("chartWindow", settings.chartWindow);
+    localStorage.setItem("mapRadius", settings.mapRadius);
+    localStorage.setItem("telemetryMode", settings.telemetryMode);
+    localStorage.setItem("predictionSensitivity", settings.predictionSensitivity);
+
+    window.dispatchEvent(new Event("app-settings-changed"));
+
+    setMessage("Settings saved and applied successfully.");
+    setTimeout(() => setMessage(""), 2500);
+  };
+
+  const resetSettings = () => {
+    setSettings(DEFAULT_SETTINGS);
+
+    Object.keys(DEFAULT_SETTINGS).forEach((key) => {
+      localStorage.removeItem(key);
+    });
+
+    window.dispatchEvent(new Event("app-settings-changed"));
+
+    setMessage("Settings reset to default values.");
+    setTimeout(() => setMessage(""), 2500);
+  };
+
+  const loadHealth = async () => {
+    setLoadingHealth(true);
+
+    try {
+      const response = await fetch(`${API_URL}/api/health`, {
+        cache: "no-store",
+      });
+
+      const data = await response.json();
+      setHealth(data);
+    } catch {
+      setHealth({
+        status: "unreachable",
+        api_service: "offline",
+        database: "unknown",
+        ml_service: "unknown",
+      });
+    } finally {
+      setLoadingHealth(false);
+    }
+  };
+
+  useEffect(() => {
+    const loadedSettings = { ...DEFAULT_SETTINGS };
+
+    Object.keys(DEFAULT_SETTINGS).forEach((key) => {
+      const value = localStorage.getItem(key);
+
+      if (value) {
+        (loadedSettings as any)[key] = value;
+      }
+    });
+
+    setSettings(loadedSettings);
+    loadHealth();
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold text-white">Settings</h1>
+        <p className="mt-2 text-slate-400">
+          Real application configuration, telemetry behavior, and deployment status.
+        </p>
+      </div>
+
+      {message && (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+          {message}
+        </div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+          <div className="mb-6 flex items-center gap-3">
+            <Monitor className="h-5 w-5 text-cyan-300" />
+            <h2 className="text-lg font-bold text-white">Appearance Settings</h2>
+          </div>
+
+          <div className="space-y-5">
+            <SettingSelect
+              label="Theme Mode"
+              value={settings.themeMode}
+              options={["Dark", "Midnight", "High Contrast"]}
+              onChange={(value) => updateSetting("themeMode", value)}
+            />
+
+            <SettingSelect
+              label="Font Size"
+              value={settings.fontSize}
+              options={["Small", "Medium", "Large", "Extra Large"]}
+              onChange={(value) => updateSetting("fontSize", value)}
+            />
+
+            <SettingSelect
+              label="Sidebar Mode"
+              value={settings.sidebarMode}
+              options={["Expanded", "Compact"]}
+              onChange={(value) => updateSetting("sidebarMode", value)}
+            />
+
+            <SettingSelect
+              label="UI Density"
+              value={settings.uiDensity}
+              options={["Compact", "Comfortable", "Spacious"]}
+              onChange={(value) => updateSetting("uiDensity", value)}
+            />
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+          <div className="mb-6 flex items-center gap-3">
+            <Gauge className="h-5 w-5 text-emerald-300" />
+            <h2 className="text-lg font-bold text-white">Telemetry Settings</h2>
+          </div>
+
+          <div className="space-y-5">
+            <SettingSelect
+              label="Refresh Rate"
+              value={settings.refreshRate}
+              options={["3s", "5s", "10s", "30s", "60s"]}
+              onChange={(value) => updateSetting("refreshRate", value)}
+            />
+
+            <SettingSelect
+              label="Chart Time Window"
+              value={settings.chartWindow}
+              options={["5 minutes", "15 minutes", "30 minutes", "1 hour", "6 hours"]}
+              onChange={(value) => updateSetting("chartWindow", value)}
+            />
+
+            <SettingSelect
+              label="Default Coverage Radius"
+              value={settings.mapRadius}
+              options={["5 km", "10 km", "25 km", "50 km"]}
+              onChange={(value) => updateSetting("mapRadius", value)}
+            />
+
+            <SettingSelect
+              label="Telemetry Source"
+              value={settings.telemetryMode}
+              options={["Live API", "Cloud SQL Latest Metric", "BigQuery Stream", "Hybrid"]}
+              onChange={(value) => updateSetting("telemetryMode", value)}
+            />
+          </div>
+        </section>
+      </div>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+        <div className="mb-6 flex items-center gap-3">
+          <BrainCircuit className="h-5 w-5 text-violet-300" />
+          <h2 className="text-lg font-bold text-white">AI / ML Configuration</h2>
+        </div>
+
+        <div className="grid gap-5 lg:grid-cols-2">
+          <SettingSelect
+            label="Prediction Sensitivity"
+            value={settings.predictionSensitivity}
+            options={["Conservative", "Balanced", "Aggressive", "Critical Only"]}
+            onChange={(value) => updateSetting("predictionSensitivity", value)}
+          />
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <p className="text-sm text-slate-400">ML Inference Mode</p>
+            <p className="mt-2 text-sm font-semibold text-emerald-300">
+              Live Cloud Run ML Service
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Input features are pulled from real QoS telemetry: throughput, latency,
+              jitter, packet loss, and bandwidth utilization.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Server className="h-5 w-5 text-cyan-300" />
+            <h2 className="text-lg font-bold text-white">System Configuration</h2>
+          </div>
+
+          <button
+            onClick={loadHealth}
+            className="rounded-lg border border-cyan-500/30 px-3 py-2 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/10"
+          >
+            {loadingHealth ? "Checking..." : "Refresh Status"}
+          </button>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <StatusRow
+            icon={<Server className="h-4 w-4" />}
+            label="Backend API"
+            value={health?.api_service || health?.status || "Checking"}
+            status={health?.api_service === "operational" || health?.status === "healthy"}
+          />
+
+          <StatusRow
+            icon={<Database className="h-4 w-4" />}
+            label="Database"
+            value={health?.database || "Checking"}
+            status={health?.database === "operational"}
+          />
+
+          <StatusRow
+            icon={<BrainCircuit className="h-4 w-4" />}
+            label="ML Service"
+            value={health?.ml_service || "Checking"}
+            status={health?.ml_service === "operational"}
+          />
+
+          <StatusRow
+            icon={<ShieldCheck className="h-4 w-4" />}
+            label="Deployment"
+            value={deploymentInfo.environment}
+            status={deploymentInfo.environment === "Google Cloud Run"}
+          />
+        </div>
+
+        <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950 p-4">
+          <p className="text-xs text-slate-500">Frontend Host</p>
+          <p className="mt-1 break-all text-sm text-slate-300">
+            {deploymentInfo.frontend}
+          </p>
+
+          <p className="mt-4 text-xs text-slate-500">Backend API</p>
+          <p className="mt-1 break-all text-sm text-slate-300">
+            {API_URL}
+          </p>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+        <div className="mb-5 flex items-center gap-3">
+          <Settings className="h-5 w-5 text-emerald-300" />
+          <h2 className="text-lg font-bold text-white">Platform Information</h2>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <InfoItem label="Platform" value="QoS Analytics & Prediction Platform" />
+          <InfoItem label="Version" value="1.0.0 Cloud Run Release" />
+          <InfoItem label="Developer" value="Muhammad Febryadi — Full Stack Developer" />
+          <InfoItem label="Developer" value="Sandy Muhammad Rifqi — UI/UX Developer" />
+          <InfoItem label="Data Source" value="Cloud SQL, BigQuery, OpenCellID, Cloud Storage" />
+          <InfoItem label="AI Module" value="QoS ML Prediction Service" />
+        </div>
+      </section>
+
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={saveSettings}
+          className="flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-emerald-400"
+        >
+          <Save className="h-4 w-4" />
+          Save Settings
+        </button>
+
+        <button
+          onClick={resetSettings}
+          className="flex items-center gap-2 rounded-xl border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-300 hover:bg-slate-800"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Reset Defaults
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SettingSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-slate-800 pb-4">
+      <div>
+        <p className="font-medium text-slate-200">{label}</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Current value: {value}
+        </p>
+      </div>
+
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-w-[170px] rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-semibold text-white outline-none focus:border-emerald-400"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function StatusRow({
+  icon,
+  label,
+  value,
+  status,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  status: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950 p-4">
+      <div className="flex items-center gap-3">
+        <span className={status ? "text-emerald-300" : "text-red-300"}>
+          {icon}
+        </span>
+        <span className="text-sm font-semibold text-slate-300">
+          {label}
+        </span>
+      </div>
+
+      <span className={status ? "text-sm font-bold text-emerald-300" : "text-sm font-bold text-red-300"}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function InfoItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-white">{value}</p>
+    </div>
+  );
+}
